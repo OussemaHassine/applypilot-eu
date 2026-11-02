@@ -415,6 +415,7 @@ routes.responses = async (view) => {
 
 // ── live run panel ─────────────────────────────────────────────────────
 const STAGE_NAMES = { discover: "Finding jobs", enrich: "Fetching job descriptions", pipeline: "Scoring & tailoring", score: "Scoring", tailor: "Tailoring CVs", cover: "Cover letters", pdf: "PDFs", apply: "Applying", inbox: "Checking Gmail", followups: "Email follow-ups" };
+const NOISE_RE = /HTTP Request|already have PDFs|no job data returned|URL resolution:|No pending jobs/;
 function parseLive(logText) {
   const lines = (logText || "").split("\n").filter(Boolean);
   let stage = null, progress = null, last = null;
@@ -427,7 +428,7 @@ function parseLive(logText) {
     if (/Launching apply pipeline|Chrome started/.test(l)) stage = "apply";
     const p = l.match(/Progress: (\d+)\/(\d+)/) || l.match(/\[(\d+)\/(\d+)\] /) || l.match(/(\d+)\/(\d+) \[(APPROVED|OK|FAILED[_A-Z]*)\]/);
     if (p) progress = { done: +p[1], total: +p[2] };
-    if (!/HTTP Request|already have PDFs/.test(l)) last = l;
+    if (!NOISE_RE.test(l)) last = l;
   }
   return { stage, progress, last: last ? last.replace(/^\d\d:\d\d:\d\d - \w+ - /, "") : "" };
 }
@@ -435,7 +436,7 @@ function livePanel(run, logText, workers, inProgress) {
   const info = parseLive(logText);
   const started = run ? new Date(run.started) : null;
   const elapsed = started ? Math.round((Date.now() - started.getTime()) / 60000) : null;
-  const pre = h("pre", { class: "log tall", style: "max-height:420px" }, (logText || "Starting…").split("\n").filter((l) => !/HTTP Request|already have PDFs/.test(l)).join("\n"));
+  const pre = h("pre", { class: "log tall", style: "max-height:420px" }, (logText || "Starting…").split("\n").filter((l) => !NOISE_RE.test(l)).join("\n"));
   requestAnimationFrame(() => { pre.scrollTop = pre.scrollHeight; });
   return h("div", {},
     h("div", { class: "row", style: "margin-bottom:8px;gap:12px" },
