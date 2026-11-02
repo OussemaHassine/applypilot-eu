@@ -443,6 +443,14 @@ async def auth(request: Request, call_next):
 @app.on_event("startup")
 def _startup() -> None:
     config.load_env()
+    try:
+        if table_exists("email_responses"):
+            cols = {r["name"] for r in rows("PRAGMA table_info(email_responses)")}
+            if "handled" not in cols:
+                with db() as conn:
+                    conn.execute("ALTER TABLE email_responses ADD COLUMN handled INTEGER DEFAULT 0")
+    except Exception:
+        pass
     threading.Thread(target=scheduler_loop, daemon=True, name="scheduler").start()
 
 
@@ -499,8 +507,18 @@ def overview():
                            "sub": r["summary"] or "", "detail": "", "url": None})
     events.sort(key=lambda e: e["at"] or "", reverse=True)
 
+    todo = {"emails": [], "forms": []}
+    if table_exists("email_responses"):
+        todo["emails"] = rows("""SELECT message_id, received_at, company, summary, action, subject FROM email_responses
+            WHERE job_related=1 AND category='info_request' AND coalesce(handled,0)=0 ORDER BY received_at DESC LIMIT 12""")
+        for e in todo["emails"]:
+            e["gmail"] = f"https://mail.google.com/mail/u/0/#search/rfc822msgid%3A{(e['message_id'] or '').strip('<>')}"
+    todo["forms"] = rows("""SELECT url, title, location, replace(apply_error,'missing_required_','') missing FROM jobs
+        WHERE apply_status='failed' AND apply_error LIKE 'missing_required%' ORDER BY last_attempted_at DESC LIMIT 20""")
+
     return {
         "counts": j,
+        "todo": todo,
         "per_day": [{"day": d, "n": per_day.get(d, 0)} for d in days],
         "countries": [{"name": k, "n": v} for k, v in countries.most_common(12)],
         "failures": fails,
@@ -616,7 +634,7 @@ def files(kind: str, name: str):
 # responses --------------------------------------------------------------
 
 @app.get("/api/responses")
-def responses(category: str = ""):
+def responses(category: str = "", include_handled: int = 0):
     if not table_exists("email_responses"):
         return {"items": [], "counts": {}}
     where = "job_related=1"
@@ -624,6 +642,8 @@ def responses(category: str = ""):
     if category:
         where += " AND category = ?"
         params = (category,)
+    if not include_handled:
+        where += " AND coalesce(handled,0)=0"
     items = rows(f"SELECT * FROM email_responses WHERE {where} ORDER BY received_at DESC LIMIT 400", params)
     for it in items:
         mid = (it.get("message_id") or "").strip("<>")
@@ -822,6 +842,122 @@ def settings_put(data: dict = Body(...)):
         ui["prices"].update({k: float(v) for k, v in data["prices"].items() if k in ui["prices"]})
         save_ui(ui)
     return settings_get()
+
+
+# actions on jobs / emails / external processes ------------------------------
+
+@app.post("/api/job/action")
+def job_action(data: dict = Body(...)):
+    url, action = data.get("url"), data.get("action")
+    if not url or not rows("SELECT 1 FROM jobs WHERE url=?", (url,)):
+        raise HTTPException(404, "job not found")
+    now = datetime.now(timezone.utc).isoformat()
+    with db() as conn:
+        if action == "skip":
+            conn.execute("UPDATE jobs SET apply_status='failed', apply_error='skipped by you', apply_attempts=99, agent_id=NULL WHERE url=?", (url,))
+        elif action == "requeue":
+            conn.execute("UPDATE jobs SET apply_status=NULL, apply_error=NULL, apply_attempts=0, agent_id=NULL WHERE url=?", (url,))
+        elif action == "mark_applied":
+            conn.execute("UPDATE jobs SET apply_status='applied', applied_at=?, apply_error=NULL, agent_id=NULL WHERE url=?", (now, url))
+        elif action == "retailor":
+            conn.execute("""UPDATE jobs SET tailored_resume_path=NULL, tailored_at=NULL, tailor_attempts=0,
+                            cover_letter_path=NULL, cover_letter_at=NULL, cover_attempts=0,
+                            apply_status=CASE WHEN apply_status='applied' THEN apply_status ELSE NULL END,
+                            apply_error=CASE WHEN apply_status='applied' THEN apply_error ELSE NULL END WHERE url=?""", (url,))
+        else:
+            raise HTTPException(400, "unknown action")
+        conn.commit()
+    return {"ok": True}
+
+
+@app.post("/api/jobs/requeue_parked")
+def requeue_parked():
+    with db() as conn:
+        cur = conn.execute("UPDATE jobs SET apply_status=NULL, apply_error=NULL, apply_attempts=0, agent_id=NULL "
+                           "WHERE apply_status='failed' AND apply_error LIKE 'missing_required%'")
+        conn.commit()
+        return {"requeued": cur.rowcount}
+
+
+@app.post("/api/responses/handled")
+def responses_handled(data: dict = Body(...)):
+    if not table_exists("email_responses"):
+        raise HTTPException(404)
+    with db() as conn:
+        conn.execute("UPDATE email_responses SET handled=? WHERE message_id=?", (1 if data.get("handled") else 0, data.get("message_id")))
+        conn.commit()
+    return {"ok": True}
+
+
+@app.get("/api/applications.csv")
+def applications_csv(status: str = "applied"):
+    import csv
+    import io
+    items = applications(status=status, limit=100000)["items"]
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["date", "title", "country", "location", "board", "fit_score", "status", "detail", "url"])
+    for it in items:
+        w.writerow([(it["applied_at"] or it["last_attempted_at"] or "")[:16], it["title"], it["country"], it["location"],
+                    it["site"], it["fit_score"], it["apply_status"] or "queued", it["apply_error"] or "", it["url"]])
+    return Response(buf.getvalue(), media_type="text/csv",
+                    headers={"Content-Disposition": f'attachment; filename="applypilot-{status}-{datetime.now().date()}.csv"'})
+
+
+@app.post("/api/test/gmail")
+def test_gmail():
+    import imaplib
+    import socket
+    address = os.environ.get("GMAIL_ADDRESS", "").strip()
+    password = os.environ.get("GMAIL_APP_PASSWORD", "").replace(" ", "")
+    if not address or not password:
+        return {"ok": False, "error": "Gmail address or app password not set"}
+    try:
+        socket.setdefaulttimeout(12)
+        im = imaplib.IMAP4_SSL("imap.gmail.com")
+        im.login(address, password)
+        typ, data = im.select("INBOX", readonly=True)
+        im.logout()
+        return {"ok": True, "detail": f"Signed in as {address}; {int(data[0]) if data and data[0] else '?'} messages in Inbox"}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)[:200]}
+    finally:
+        socket.setdefaulttimeout(None)
+
+
+@app.post("/api/test/llm")
+def test_llm():
+    try:
+        from applypilot.llm import LLMClient, _detect_provider
+        base, model, key = _detect_provider()
+        client = LLMClient(base, model, key)
+        t0 = time.time()
+        reply = client.ask("Reply with exactly the word OK.", max_tokens=20)
+        return {"ok": True, "detail": f"{model} answered in {time.time() - t0:.1f}s: {reply.strip()[:40]}"}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)[:200]}
+
+
+@app.post("/api/runs/external/stop")
+def stop_external():
+    """Politely stop ApplyPilot processes that were not started by this UI (CLI, n8n, scripts)."""
+    stopped = 0
+    for pattern in (r"stage\.sh|daily_run\.sh", r"python.*applypilot (apply|run)"):
+        try:
+            out = subprocess.run(["pgrep", "-f", pattern], capture_output=True, text=True).stdout.split()
+        except Exception:
+            out = []
+        for pid in out:
+            try:
+                os.kill(int(pid), signal.SIGINT)
+                stopped += 1
+            except Exception:
+                pass
+    time.sleep(3)
+    with db() as conn:
+        conn.execute("UPDATE jobs SET apply_status=NULL, agent_id=NULL WHERE apply_status='in_progress'")
+        conn.commit()
+    return {"signalled": stopped, "still_running": external_processes()}
 
 
 # costs --------------------------------------------------------------------

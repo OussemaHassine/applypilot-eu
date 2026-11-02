@@ -247,3 +247,15 @@ fieldset legend { font-size: 12px; color: var(--ink-2); padding: 0 6px; font-wei
 .hbar > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .feed .t-sub { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 input[type=range] { accent-color: var(--ink); width: 100%; }
+
+.backdrop { position: fixed; inset: 0; background: rgba(20,20,18,.25); opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 25; }
+.backdrop.on { opacity: 1; pointer-events: auto; }
+.todo { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.todo ul { list-style: none; margin: 0; padding: 0; }
+.todo li { padding: 8px 0; border-bottom: 1px solid var(--line); display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: start; }
+.todo li:last-child { border-bottom: 0; }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 14px 0; padding: 12px 14px; background: var(--sunk); border-radius: 8px; align-items: center; }
+.actions .lbl { font-size: 12px; color: var(--muted); margin-right: 4px; }
+.result { font-size: 12.5px; margin-left: 8px; }
+.result.ok { color: var(--good); } .result.bad { color: var(--bad); }
+@media (max-width: 1100px) { .todo { grid-template-columns: 1fr; } }

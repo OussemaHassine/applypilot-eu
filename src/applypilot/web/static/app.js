@@ -25,6 +25,8 @@ const svg = (tag, attrs = {}) => {
   for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
   return el;
 };
+// replaceChildren() renders null as the text "null"; mount() drops null/false children first.
+function mount(el, ...kids) { el.replaceChildren(...kids.flat(Infinity).filter((k) => k != null && k !== false)); }
 async function api(path, opts = {}) {
   const res = await fetch(path, {
     method: opts.method || "GET",
@@ -70,6 +72,22 @@ const ERR_LABEL = {
   email_only_application: "Email-only", sso_required: "Single sign-on only", unsafe_verification: "Video / ID check",
   "missing info": "Missing info from you", no_result_line: "No result (agent stopped)",
 };
+const FAIL_HELP = {
+  duplicate_application: "The same role at this employer was already applied to through another posting, so this copy was skipped on purpose.",
+  login_issue: "The employer's career site has an account under your email with a password the agent did not have. Password resets are now allowed, so a retry can get through.",
+  captcha: "An image CAPTCHA blocked the form. A CapSolver key in Settings would let the agent solve these.",
+  expired: "The posting was closed when the agent got there.",
+  not_eligible_work_auth: "The posting requires existing work rights the profile does not claim (usually the UK).",
+  not_eligible_location: "On-site only, in a place outside your accepted locations, or the employer restricts candidates to local residents.",
+  email_only_application: "Applications only by email; the agent never sends email on your behalf.",
+  sso_required: "The site only offers Google or Microsoft sign-in, which the agent refuses by design.",
+  unsafe_verification: "The site asked for a recorded video interview, ID or selfie check. Finish it yourself if the role interests you.",
+  no_result_line: "The agent stopped without a result, most likely because the Claude usage limit was reached. Re-queue to retry.",
+  "skipped by you": "You skipped this one from the dashboard.",
+};
+const failHelp = (e) => (e || "").startsWith("missing_required_")
+  ? `The form required "${e.slice(17).replace(/_/g, " ")}", which is not in your profile. Add it under Profile → Extra facts, then re-queue.`
+  : FAIL_HELP[e] || "";
 const errLabel = (e) => ERR_LABEL[e] || (e && e.startsWith("missing_required_") ? "Needs: " + e.slice(17).replace(/_/g, " ") : human(e || "unknown"));
 
 function statusChip(status, error) {
@@ -160,11 +178,11 @@ async function navigate() {
   const name = (location.hash.replace(/^#\/?/, "").split("?")[0] || "overview");
   document.querySelectorAll("#nav a").forEach((a) => a.classList.toggle("active", a.dataset.route === name));
   const view = $("#view");
-  view.replaceChildren(h("div", { class: "empty" }, "Loading…"));
+  mount(view, h("div", { class: "empty" }, "Loading…"));
   try {
     await (routes[name] || routes.overview)(view);
   } catch (e) {
-    view.replaceChildren(h("div", { class: "callout" }, "Could not load this page: " + e.message));
+    mount(view, h("div", { class: "callout" }, "Could not load this page: " + e.message));
   }
   view.focus({ preventScroll: true });
 }
@@ -183,21 +201,23 @@ async function pollSide() {
     else txt = "Idle";
     if (l.in_progress.length) txt += ` · ${l.in_progress.length} applying`;
     const next = l.next_round ? "Next round " + when(l.next_round) : "No round scheduled";
-    el.replaceChildren(h("span", { class: "dot" }), h("span", {}, txt, h("br"), h("span", { class: "muted" }, next)));
+    mount(el, h("span", { class: "dot" }), h("span", {}, txt, h("br"), h("span", { class: "muted" }, next)));
   } catch (_) {}
 }
 setInterval(pollSide, 5000);
 
 // ── drawer (job detail) ─────────────────────────────────────────────────
-function closeDrawer() { const d = $("#drawer"); d.classList.remove("open"); d.setAttribute("aria-hidden", "true"); }
+function closeDrawer() { const d = $("#drawer"); d.classList.remove("open"); d.setAttribute("aria-hidden", "true"); $("#backdrop").classList.remove("on"); }
+document.addEventListener("DOMContentLoaded", () => $("#backdrop").addEventListener("click", closeDrawer));
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDrawer(); });
 async function openJob(url) {
   const d = $("#drawer");
-  d.replaceChildren(h("div", { class: "empty" }, "Loading…"));
+  mount(d, h("div", { class: "empty" }, "Loading…"));
   d.classList.add("open");
   d.setAttribute("aria-hidden", "false");
+  $("#backdrop").classList.add("on");
   const j = await api("/api/job?url=" + encodeURIComponent(url));
-  d.replaceChildren(
+  mount(d, 
     h("button", { class: "btn sm close", onclick: closeDrawer }, "Close"),
     h("p", { class: "muted small" }, [j.country, j.site].filter(Boolean).join(" · ")),
     h("h1", {}, j.title),
@@ -213,6 +233,12 @@ async function openJob(url) {
       h("dt", {}, "Applied"), h("dd", {}, j.applied_at ? when(j.applied_at) : "–"),
       j.error && [h("dt", {}, "Outcome"), h("dd", {}, errLabel(j.error))],
       h("dt", {}, "Why it matched"), h("dd", {}, (j.score_reasoning || "–").split("\n").pop())),
+    j.error && failHelp(j.error) ? h("div", { class: "callout" + ((j.error || "").startsWith("missing_required") ? "" : " info") }, failHelp(j.error)) : null,
+    h("div", { class: "actions" }, h("span", { class: "lbl" }, "Actions"),
+      j.status !== "applied" && h("button", { class: "btn sm", onclick: () => jobAction(url, "requeue", "Back in the queue") }, "Re-queue"),
+      j.status !== "applied" && h("button", { class: "btn sm", onclick: () => jobAction(url, "skip", "Skipped") }, "Skip this job"),
+      j.status !== "applied" && h("button", { class: "btn sm", onclick: () => confirm("Mark as applied? Use this if you applied by hand.") && jobAction(url, "mark_applied", "Marked as applied") }, "I applied by hand"),
+      h("button", { class: "btn sm", onclick: () => confirm("Throw away this CV and cover letter so they are rebuilt on the next round?") && jobAction(url, "retailor", "Will be rebuilt on the next round") }, "Rebuild CV next round")),
     j.emails.length ? h("div", { class: "section" }, h("h2", {}, "Emails from this employer"),
       j.emails.map((m) => h("div", { class: "row", style: "padding:6px 0" }, catChip(m.category), h("span", {}, m.summary), h("span", { class: "muted small" }, when(m.received_at))))) : null,
     h("div", { class: "section" },
@@ -220,6 +246,11 @@ async function openJob(url) {
       j.cv_text && h("details", {}, h("summary", {}, "Tailored CV (text)"), h("pre", { class: "log tall" }, j.cv_text)),
       j.cover_text && h("details", {}, h("summary", {}, "Cover letter"), h("pre", { class: "log" }, j.cover_text)),
       h("details", {}, h("summary", {}, "Job description"), h("pre", { class: "log tall" }, j.description || "–"))));
+}
+
+async function jobAction(url, action, msg) {
+  try { await api("/api/job/action", { method: "POST", body: { url, action } }); toast(msg); closeDrawer(); navigate(); }
+  catch (e) { toast(e.message, true); }
 }
 
 // ── Overview ────────────────────────────────────────────────────────────
@@ -237,7 +268,19 @@ routes.overview = async (view) => {
             live.in_progress.length ? h("div", { class: "small" }, "Applying to: ", live.in_progress.map((j) => j.title).join(" · ")) : null))
       : null;
 
-    view.replaceChildren(
+    const todo = o.todo || { emails: [], forms: [] };
+    const todoCard = (todo.emails.length || todo.forms.length) ? h("div", { class: "card section" }, h("h2", {}, "Needs you"),
+      h("div", { class: "todo" },
+        h("div", {}, h("h3", {}, "Emails asking for something"), todo.emails.length ? h("ul", {}, todo.emails.map((e) => h("li", {},
+          h("div", {}, h("div", { class: "t-title" }, e.company || e.subject), h("div", { class: "t-sub" }, e.action || e.summary)),
+          h("div", { class: "row" }, h("a", { class: "btn sm", href: e.gmail, target: "_blank", rel: "noopener" }, "Open"),
+            h("button", { class: "btn sm ghost", title: "Mark as handled", onclick: async () => { await api("/api/responses/handled", { method: "POST", body: { message_id: e.message_id, handled: true } }); render(); } }, "Done"))))) : h("p", { class: "muted small" }, "Nothing pending.")),
+        h("div", {}, h("h3", {}, "Forms waiting for a fact"), todo.forms.length ? h("ul", {}, todo.forms.map((f) => h("li", {},
+          h("div", {}, h("a", { href: "#", class: "t-title", onclick: (ev) => { ev.preventDefault(); openJob(f.url); } }, f.title), h("div", { class: "t-sub" }, "Needs: " + f.missing.replace(/_/g, " ") + " · " + (f.location || ""))),
+          h("a", { class: "btn sm", href: "#/profile" }, "Add in profile")))) : h("p", { class: "muted small" }, "Nothing parked."),
+          todo.forms.length ? h("div", { style: "margin-top:10px" }, h("button", { class: "btn sm", onclick: async () => { const r = await api("/api/jobs/requeue_parked", { method: "POST" }); toast(`${r.requeued} re-queued`); render(); } }, "Re-queue all (after adding the facts)")) : null))) : null;
+
+    mount(view, 
       h("div", { class: "head" },
         h("div", {}, h("h1", {}, "Overview"), h("p", { class: "sub" }, `${fmtNum(c.total)} postings found · ${fmtNum(c.matches)} matched your profile · ${fmtNum(c.queued)} ready to send`)),
         h("div", { class: "row" }, h("a", { class: "btn", href: "#/responses" }, "Responses"), h("button", { class: "btn primary", onclick: () => startRun("round") }, "Run a round now"))),
@@ -249,6 +292,7 @@ routes.overview = async (view) => {
         h("div", { class: "kpi" }, h("div", { class: "l" }, "Rejections"), h("div", { class: "v" }, fmtNum(r.rejection || 0)), h("div", { class: "d" }, "from email")),
         h("div", { class: "kpi" }, h("div", { class: "l" }, "Queued"), h("div", { class: "v" }, fmtNum(c.queued)), h("div", { class: "d" }, "CV ready, not sent"))),
       liveCard,
+      todoCard,
       h("div", { class: "grid g-main section" },
         h("div", { class: "card" }, h("h2", {}, "Applications per day, last 14 days"),
           columnChart(o.per_day.map((d) => ({ label: new Date(d.day).toLocaleDateString(undefined, { day: "numeric" }), value: d.n, tip: `${new Date(d.day).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" })}: ${d.n} sent` })))),
@@ -291,19 +335,26 @@ routes.applications = async (view) => {
   const list = h("div");
   const counts = {};
   const tabBar = h("div", { class: "tabs" });
-  const drawTabs = () => tabBar.replaceChildren(...tabs.map(([k, l]) =>
+  const drawTabs = () => mount(tabBar, ...tabs.map(([k, l]) =>
     h("button", { class: state.status === k ? "on" : "", onclick: () => { state.status = k; drawTabs(); load(); } }, l, counts[k] != null ? h("span", { class: "count" }, counts[k]) : null)));
   const search = h("input", { type: "search", placeholder: "Search role, place or text…", style: "max-width:320px", oninput: debounce((e) => { state.q = e.target.value; load(); }, 300) });
+  const banner = h("div");
+  const exportBtn = h("a", { class: "btn sm", href: "/api/applications.csv?status=applied", download: "" }, "Export sent (CSV)");
   const countrySel = h("select", { style: "max-width:200px", onchange: (e) => { state.country = e.target.value; load(); } }, h("option", { value: "" }, "All countries"));
 
   async function load() {
     const d = await api(`/api/applications?status=${state.status}&q=${encodeURIComponent(state.q)}&country=${encodeURIComponent(state.country)}&limit=500`);
     counts[state.status] = d.total;
     drawTabs();
+    exportBtn.href = `/api/applications.csv?status=${state.status}`;
+    exportBtn.textContent = { applied: "Export sent (CSV)", queued: "Export queue (CSV)", parked: "Export (CSV)", failed: "Export (CSV)", matches: "Export matches (CSV)" }[state.status];
+    mount(banner, state.status === "parked" && d.total ? h("div", { class: "callout", style: "margin-bottom:14px" },
+      "These forms asked for a fact that is not in your profile. Add it under Profile → Extra facts (or the matching field), then ",
+      h("button", { class: "btn sm", style: "margin-left:6px", onclick: async () => { const r = await api("/api/jobs/requeue_parked", { method: "POST" }); toast(`${r.requeued} re-queued`); load(); } }, "Re-queue all")) : null);
     if (!state.q && !state.country && countrySel.options.length === 1) {
       [...new Set(d.items.map((i) => i.country))].sort().forEach((c) => countrySel.append(h("option", { value: c }, c)));
     }
-    list.replaceChildren(d.items.length ? h("div", { class: "card flush" }, h("table", {},
+    mount(list, d.items.length ? h("div", { class: "card flush" }, h("table", {},
       h("thead", {}, h("tr", {}, h("th", {}, "When"), h("th", {}, "Role"), h("th", {}, "Where"), h("th", { class: "num" }, "Fit"), h("th", {}, "Status"), h("th", {}, ""))),
       h("tbody", {}, d.items.map((it) => h("tr", { class: "click", onclick: () => openJob(it.url) },
         h("td", { class: "muted small num", style: "text-align:left;white-space:nowrap" }, when(it.applied_at || it.last_attempted_at, false) || "–"),
@@ -313,9 +364,9 @@ routes.applications = async (view) => {
         h("td", {}, statusChip(it.apply_status, it.apply_error), it.apply_error && it.apply_error !== "duplicate_application" ? h("div", { class: "t-sub", style: "margin-top:4px" }, errLabel(it.apply_error)) : null),
         h("td", { class: "small muted" }, [it.has_cv ? "CV" : "", it.has_cl ? "Letter" : ""].filter(Boolean).join(" · "))))))) : h("div", { class: "card empty" }, "Nothing here."));
   }
-  view.replaceChildren(
+  mount(view, 
     h("div", { class: "head" }, h("div", {}, h("h1", {}, "Applications"), h("p", { class: "sub" }, "Click a row for the tailored CV, cover letter, emails and what the agent did on the form."))),
-    tabBar, h("div", { class: "row", style: "margin-bottom:14px" }, search, countrySel), list);
+    tabBar, h("div", { class: "row", style: "margin-bottom:14px" }, search, countrySel, h("span", { class: "spacer" }), exportBtn), banner, list);
   drawTabs();
   await load();
   // fill counts for the other tabs quietly
@@ -325,29 +376,31 @@ function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTi
 
 // ── Responses ───────────────────────────────────────────────────────────
 routes.responses = async (view) => {
-  let cat = "";
+  let cat = "", showHandled = false;
   const order = ["", "info_request", "interview", "assessment", "offer", "recruiter_outreach", "rejection", "confirmation", "job_alert"];
   const listEl = h("div");
   const tabBar = h("div", { class: "tabs" });
   async function load() {
-    const d = await api("/api/responses" + (cat ? "?category=" + cat : ""));
+    const d = await api(`/api/responses?category=${cat}&include_handled=${showHandled ? 1 : 0}`);
     const total = Object.entries(d.counts).filter(([k]) => !["confirmation", "job_alert", "other"].includes(k)).reduce((a, [, v]) => a + v, 0);
-    tabBar.replaceChildren(...order.map((k) => h("button", { class: cat === k ? "on" : "", onclick: () => { cat = k; load(); } },
+    mount(tabBar, ...order.map((k) => h("button", { class: cat === k ? "on" : "", onclick: () => { cat = k; load(); } },
       k ? (CAT[k] || [k])[0] : "Real replies", h("span", { class: "count" }, k ? (d.counts[k] || 0) : total))));
     let items = d.items;
     if (!cat) items = items.filter((i) => !["confirmation", "job_alert", "other"].includes(i.category));
-    listEl.replaceChildren(items.length ? h("div", { class: "card flush" }, h("table", {}, h("tbody", {}, items.map((m) => h("tr", {},
+    mount(listEl, items.length ? h("div", { class: "card flush" }, h("table", {}, h("tbody", {}, items.map((m) => h("tr", {},
       h("td", { style: "width:150px" }, catChip(m.category), h("div", { class: "t-sub", style: "margin-top:6px" }, when(m.received_at))),
       h("td", {}, h("div", { class: "t-title" }, m.company || m.sender), m.role ? h("div", { class: "t-sub" }, m.role) : null,
         h("div", { style: "margin-top:4px" }, m.summary), m.action ? h("div", { class: "small", style: "margin-top:4px" }, h("strong", {}, "To do: "), m.action) : null),
-      h("td", { style: "width:120px;text-align:right" }, h("a", { class: "btn sm", href: m.gmail, target: "_blank", rel: "noopener" }, "Open in Gmail"),
+      h("td", { style: "width:150px;text-align:right" }, h("div", { class: "row", style: "justify-content:flex-end" }, h("a", { class: "btn sm", href: m.gmail, target: "_blank", rel: "noopener" }, "Open in Gmail"),
+          h("button", { class: "btn sm ghost", title: m.handled ? "Mark as not handled" : "Mark as handled", onclick: async () => { await api("/api/responses/handled", { method: "POST", body: { message_id: m.message_id, handled: !m.handled } }); load(); } }, m.handled ? "Undo" : "Done")),
         m.job_url ? h("div", { style: "margin-top:6px" }, h("a", { href: "#", class: "small", onclick: (e) => { e.preventDefault(); openJob(m.job_url); } }, "Application")) : null))))))
       : h("div", { class: "card empty" }, "No emails in this category yet."));
   }
-  view.replaceChildren(
+  mount(view, 
     h("div", { class: "head" },
       h("div", {}, h("h1", {}, "Responses"), h("p", { class: "sub" }, "Job emails from your Gmail, sorted by the AI and labelled in Gmail under ApplyPilot/…. Confirmations and job alerts are kept out of the way.")),
-      h("button", { class: "btn primary", onclick: () => startRun("inbox") }, "Check Gmail now")),
+      h("div", { class: "row" }, h("label", { class: "check small" }, h("input", { type: "checkbox", onchange: (e) => { showHandled = e.target.checked; load(); } }), "Show handled"),
+        h("button", { class: "btn primary", onclick: () => startRun("inbox") }, "Check Gmail now"))),
     tabBar, listEl);
   await load();
   every(30000, () => load().catch(() => {}));
@@ -374,8 +427,9 @@ routes.runs = async (view) => {
   async function loadRuns() {
     const r = await api("/api/runs");
     const cur = r.current.filter((x) => x.running);
-    runsEl.replaceChildren(
-      r.external.length ? h("div", { class: "callout", style: "margin-bottom:12px" }, "An ApplyPilot process started outside the UI is running: ", h("span", { class: "mono small" }, r.external.join(" · "))) : null,
+    mount(runsEl, 
+      r.external.length ? h("div", { class: "callout", style: "margin-bottom:12px" }, h("div", { class: "row" }, h("span", {}, "An ApplyPilot process started outside the UI is running: ", h("span", { class: "mono small" }, r.external.join(" · "))), h("span", { class: "spacer" }),
+        h("button", { class: "btn sm danger", onclick: async () => { const x = await api("/api/runs/external/stop", { method: "POST" }); toast(x.still_running.length ? "Asked it to stop; still finishing" : "Stopped"); loadRuns(); } }, "Stop it"))) : null,
       cur.length ? cur.map((x) => h("div", { class: "live-run", style: "margin-bottom:12px" },
         h("div", { class: "row" }, h("span", { class: "chip info" }, "Running"), h("strong", {}, x.label), h("span", { class: "muted small" }, (x.trigger === "schedule" ? "scheduled · " : "") + "started " + when(x.started)),
           h("span", { class: "spacer" }), h("button", { class: "btn sm danger", onclick: async () => { await api(`/api/runs/${x.id}/stop`, { method: "POST" }); toast("Stopping…"); } }, "Stop")),
@@ -383,7 +437,7 @@ routes.runs = async (view) => {
         : h("p", { class: "muted" }, "Nothing running."),
       r.nightly_log ? h("details", {}, h("summary", {}, "Today's round log"), h("pre", { class: "log tall" }, r.nightly_log)) : null);
     const finished = [...r.current.filter((x) => !x.running), ...r.history].slice(0, 15);
-    histEl.replaceChildren(finished.length ? h("table", {}, h("thead", {}, h("tr", {}, h("th", {}, "Started"), h("th", {}, "Run"), h("th", {}, "How"), h("th", {}, "Result"), h("th", {}, ""))),
+    mount(histEl, finished.length ? h("table", {}, h("thead", {}, h("tr", {}, h("th", {}, "Started"), h("th", {}, "Run"), h("th", {}, "How"), h("th", {}, "Result"), h("th", {}, ""))),
       h("tbody", {}, finished.map((x) => h("tr", {},
         h("td", { class: "small" }, when(x.started)), h("td", {}, x.label), h("td", { class: "small muted" }, x.trigger),
         h("td", {}, x.rc === 0 ? h("span", { class: "chip good" }, "Done") : h("span", { class: "chip bad" }, x.rc == null ? "Unknown" : "Exit " + x.rc)),
@@ -409,7 +463,7 @@ routes.runs = async (view) => {
     } catch (e) { toast(e.message, true); }
   }
 
-  view.replaceChildren(
+  mount(view, 
     h("div", { class: "head" }, h("div", {}, h("h1", {}, "Runs & schedule"), h("p", { class: "sub" }, "Start any stage by hand, watch it live, or let the scheduler run a full round every day. The scheduler works while this app is running and the Mac is awake."))),
     h("div", { class: "grid g3" }, actions.map(([k, title, desc, primary]) => h("div", { class: "card" },
       h("h3", {}, title), h("p", { class: "muted small", style: "min-height:40px;margin:0 0 12px" }, desc),
@@ -435,7 +489,7 @@ routes.runs = async (view) => {
 function tagInput(values, onChange) {
   const box = h("div", { class: "tags" });
   const input = h("input", { type: "text", placeholder: "Add…" });
-  const draw = () => box.replaceChildren(...values.map((v, i) => h("span", { class: "tag" }, v,
+  const draw = () => mount(box, ...values.map((v, i) => h("span", { class: "tag" }, v,
     h("button", { type: "button", "aria-label": "Remove " + v, onclick: () => { values.splice(i, 1); onChange(values); draw(); } }, "×"))), input);
   input.addEventListener("keydown", (e) => {
     if ((e.key === "Enter" || e.key === ",") && input.value.trim()) {
@@ -516,7 +570,7 @@ routes.profile = async (view) => {
     } }, "Save raw file")));
   const known = PROFILE_SECTIONS.map(([k]) => k);
   const extra = Object.keys(data).filter((k) => !k.startsWith("_") && !known.includes(k));
-  view.replaceChildren(
+  mount(view, 
     h("div", { class: "head" }, h("div", {}, h("h1", {}, "Profile"), h("p", { class: "sub" }, "Everything employers are told about you. Changes apply from the next run; the previous version is kept in backups."))),
     ...PROFILE_SECTIONS.concat(extra.map((k) => [k, human(k), ""])).filter(([k]) => data[k] && typeof data[k] === "object").map(([k, title, intro]) =>
       h("div", { class: "form-section" }, h("div", { class: "intro" }, h("h3", {}, title), h("p", {}, intro)),
@@ -531,13 +585,13 @@ routes.searches = async (view) => {
   const p = parsed;
   p.defaults = p.defaults || {};
   const qRows = h("div", { class: "list-rows" });
-  const drawQ = () => qRows.replaceChildren(...p.queries.map((q, i) => h("div", { class: "list-row", style: "grid-template-columns:1fr 150px 32px" },
+  const drawQ = () => mount(qRows, ...p.queries.map((q, i) => h("div", { class: "list-row", style: "grid-template-columns:1fr 150px 32px" },
     h("input", { type: "text", value: q.query, oninput: (e) => (q.query = e.target.value) }),
     h("select", { onchange: (e) => (q.tier = +e.target.value) }, [1, 2, 3].map((t) => h("option", { value: t, selected: q.tier === t ? "selected" : null }, ["", "Tier 1 · core", "Tier 2 · adjacent", "Tier 3 · wide net"][t]))),
     h("button", { class: "btn sm ghost", "aria-label": "Remove", onclick: () => { p.queries.splice(i, 1); drawQ(); } }, "×"))),
     h("button", { class: "btn sm", style: "justify-self:start", onclick: () => { p.queries.push({ query: "", tier: 2 }); drawQ(); } }, "Add a job title"));
   const lRows = h("div", { class: "list-rows" });
-  const drawL = () => lRows.replaceChildren(
+  const drawL = () => mount(lRows, 
     h("div", { class: "list-row small muted", style: "grid-template-columns:1fr 160px 90px 32px" }, h("span", {}, "Search location"), h("span", {}, "Indeed country site"), h("span", {}, "Remote only"), h("span")),
     ...p.locations.map((l, i) => h("div", { class: "list-row", style: "grid-template-columns:1fr 160px 90px 32px" },
       h("input", { type: "text", value: l.location, oninput: (e) => { l.location = e.target.value; l.label = l.label || e.target.value.toLowerCase(); } }),
@@ -553,7 +607,7 @@ routes.searches = async (view) => {
     catch (e) { toast(e.message, true); }
   };
   const rawArea = h("textarea", { class: "code", rows: 28 }, raw);
-  view.replaceChildren(
+  mount(view, 
     h("div", { class: "head" }, h("div", {}, h("h1", {}, "Job search"), h("p", { class: "sub" }, "What to search for and where. Each title is searched in every market."))),
     h("div", { class: "form-section" }, h("div", { class: "intro" }, h("h3", {}, "Job titles"), h("p", {}, "Tier 1 also searches company Workday portals. Write titles in any language."), h("p", {}, `${p.queries.length} titles × ${p.locations.length} markets = ${p.queries.length * p.locations.length} searches per run.`)), qRows),
     h("div", { class: "form-section" }, h("div", { class: "intro" }, h("h3", {}, "Markets"), h("p", {}, "Countries or cities to search. The Indeed country site must match (italy, france, uk, czech republic, united arab emirates…).")), lRows),
@@ -582,11 +636,11 @@ routes.cvs = async (view) => {
   const area = h("textarea", { class: "code", rows: 34 });
   const tabBar = h("div", { class: "tabs" });
   const draw = () => {
-    tabBar.replaceChildren(...Object.keys(names).map((k) => h("button", { class: lang === k ? "on" : "", onclick: () => { cvs[lang] = area.value; lang = k; draw(); } }, names[k])));
+    mount(tabBar, ...Object.keys(names).map((k) => h("button", { class: lang === k ? "on" : "", onclick: () => { cvs[lang] = area.value; lang = k; draw(); } }, names[k])));
     area.value = cvs[lang];
   };
   draw();
-  view.replaceChildren(
+  mount(view, 
     h("div", { class: "head" }, h("div", {}, h("h1", {}, "Base CVs"), h("p", { class: "sub" }, "The source of every tailored CV. Add a job, project or skill here and every future CV can use it; nothing outside these files (and your profile) is ever added."))),
     h("div", { class: "callout info", style: "margin-bottom:16px" }, "Keep the structure: name, title, contact line, then ALL-CAPS section headings. One entry per line as 'Company | Role | Place | Dates', bullets starting with '- '. Every project listed here appears on every tailored CV."),
     tabBar, area,
@@ -612,7 +666,7 @@ routes.settings = async (view) => {
   const PRICE_NAMES = { llm_input: "Input tokens ($ / 1M)", llm_cached_input: "Cached input ($ / 1M)", llm_output: "Output tokens ($ / 1M)",
     apply_estimate_per_success: "Form filling, per sent application ($)", apply_estimate_per_failure: "Form filling, per failed attempt ($)" };
   const check = (ok, label) => h("div", { class: "row", style: "padding:4px 0" }, ok ? h("span", { class: "chip good" }, "OK") : h("span", { class: "chip bad" }, "Missing"), label);
-  view.replaceChildren(
+  mount(view, 
     h("div", { class: "head" }, h("div", {}, h("h1", {}, "Settings & keys"), h("p", { class: "sub" }, `Data folder: ${s.app_dir}`))),
     h("div", { class: "form-section" }, h("div", { class: "intro" }, h("h3", {}, "How hard to push"), h("p", {}, "Used by every round, manual or scheduled.")),
       h("div", { class: "fields" },
@@ -629,6 +683,10 @@ routes.settings = async (view) => {
         h("span", { class: "h" }, KEY_HELP[k] || ""))))),
     h("div", { class: "form-section" }, h("div", { class: "intro" }, h("h3", {}, "Prices"), h("p", {}, "Used by the Costs page. USD per million tokens; apply figures are estimates per attempt.")),
       h("div", { class: "fields" }, Object.entries(prices).map(([k, v]) => h("label", { class: "f" }, PRICE_NAMES[k] || human(k), h("input", { type: "number", step: "0.01", value: v, oninput: (e) => (prices[k] = e.target.value) }))))),
+    h("div", { class: "form-section" }, h("div", { class: "intro" }, h("h3", {}, "Connection tests"), h("p", {}, "Uses the keys saved in the file, not unsaved edits.")),
+      h("div", { class: "row" },
+        h("button", { class: "btn", onclick: (e) => runTest(e.target, "/api/test/llm") }, "Test AI key"),
+        h("button", { class: "btn", onclick: (e) => runTest(e.target, "/api/test/gmail") }, "Test Gmail"))),
     h("div", { class: "form-section" }, h("div", { class: "intro" }, h("h3", {}, "System check")),
       h("div", {}, check(doc.llm_key, "LLM key"), check(doc.claude, "Claude Code CLI (fills forms)"), check(doc.chrome, "Google Chrome"), check(doc.npx, "Node.js / npx"),
         check(doc.pdflatex, "LaTeX (optional, nicer CVs)"), check(doc.gmail, "Gmail app password (optional, reply tracking)"))),
@@ -637,13 +695,22 @@ routes.settings = async (view) => {
     } }, "Save settings")));
 };
 
+async function runTest(btn, path) {
+  let out = btn.nextElementSibling && btn.nextElementSibling.classList.contains("result") ? btn.nextElementSibling : null;
+  if (!out) { out = h("span", { class: "result" }); btn.after(out); }
+  out.className = "result"; out.textContent = "Testing…"; btn.disabled = true;
+  try { const r = await api(path, { method: "POST" }); out.className = "result " + (r.ok ? "ok" : "bad"); out.textContent = r.ok ? r.detail : r.error; }
+  catch (e) { out.className = "result bad"; out.textContent = e.message; }
+  btn.disabled = false;
+}
+
 // ── Costs ──────────────────────────────────────────────────────────────
 routes.costs = async (view) => {
   const c = await api("/api/costs");
   const usd = (n, d = 2) => "$" + Number(n || 0).toFixed(d);
   const stages = Object.entries(c.llm.by_stage).sort((a, b) => b[1].usd - a[1].usd);
   const NAMES = { scorer: "Scoring", tailor: "CV tailoring", judge: "Fact-check judge", cover_letter: "Cover letters", detail: "Reading postings", inbox: "Email sorting", smartextract: "Company sites", other: "Other" };
-  view.replaceChildren(
+  mount(view, 
     h("div", { class: "head" }, h("div", {}, h("h1", {}, "Costs"), h("p", { class: "sub" }, "Measured from every call since usage logging started. Change prices in Settings."))),
     h("div", { class: "kpis", style: "grid-template-columns:repeat(4,1fr)" },
       h("div", { class: "kpi" }, h("div", { class: "l" }, "AI text (OpenAI), measured"), h("div", { class: "v" }, usd(c.llm.total_usd, 3)), h("div", { class: "d" }, `${fmtNum(c.llm.calls)} calls`)),
