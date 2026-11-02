@@ -77,7 +77,7 @@ Categories:
 - interview: invitation to talk, schedule a call or interview, or a recruiter asking for availability
 - assessment: a test, coding task, questionnaire, video interview or case study to complete
 - offer: a job offer
-- info_request: they ask for documents, details, salary, availability or confirmation before continuing
+- info_request: they ask for documents, details, salary, availability or confirmation before continuing, OR the application is incomplete / must be finalized or submitted ("finalisez votre candidature", "complete your application", "your application is incomplete")
 - recruiter_outreach: a recruiter or company reaching out about a role the candidate did not apply to
 - job_alert: newsletters, job recommendations, platform notifications
 - other: job-related but none of the above (account verification codes, password resets, etc.)
@@ -209,7 +209,8 @@ def check_inbox(days: int = 3, label: bool = True, notify_user: bool = True, dry
         imap.select("INBOX", readonly=dry_run or not label)
         typ, data = imap.search(None, "X-GM-RAW", f'"newer_than:{int(days)}d -in:chats"')
         ids = (data[0].split() if typ == "OK" and data and data[0] else [])[-max_messages:]
-        new: list[dict] = []
+        # 1) fetch candidates (IMAP is sequential), 2) classify in parallel, 3) label/notify/store
+        candidates: list[tuple[bytes, dict, str]] = []
         for num in reversed(ids):  # newest first
             typ, hdr = imap.fetch(num, "(BODY.PEEK[HEADER.FIELDS (MESSAGE-ID FROM SUBJECT DATE)])")
             if typ != "OK" or not hdr or not isinstance(hdr[0], tuple):
@@ -225,16 +226,31 @@ def check_inbox(days: int = 3, label: bool = True, notify_user: bool = True, dry
                 received = date_raw
             typ, full = imap.fetch(num, "(BODY.PEEK[]<0.120000>)")  # PEEK: never marks as read
             body = _body_text(email.message_from_bytes(full[0][1])) if typ == "OK" and full and isinstance(full[0], tuple) else ""
-
             row = {"message_id": mid, "received_at": received, "sender": sender, "subject": subject,
                    "job_related": 0, "category": None, "company": "", "role": "", "summary": "",
                    "action": "", "job_url": None, "notified": 0}
-            if _looks_job_related(sender, subject, body):
-                try:
-                    c = _classify(sender, subject, received, body, name)
-                except Exception as exc:
-                    log.warning("Classification failed for %r: %s", subject[:60], exc)
-                    continue  # retry next time
+            candidates.append((num, row, body))
+
+        from concurrent.futures import ThreadPoolExecutor
+
+        def work(item):
+            num, row, body = item
+            if not _looks_job_related(row["sender"], row["subject"], body):
+                return item, None
+            try:
+                return item, _classify(row["sender"], row["subject"], row["received_at"], body, name)
+            except Exception as exc:
+                log.warning("Classification failed for %r: %s", row["subject"][:60], exc)
+                return item, "error"
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            results = list(pool.map(work, candidates))
+
+        new: list[dict] = []
+        for (num, row, _body), c in results:
+            if c == "error":
+                continue  # retry next time
+            if c:
                 row.update(job_related=int(bool(c.get("job_related"))), category=c.get("category"),
                            company=c.get("company", ""), role=c.get("role", ""),
                            summary=c.get("summary", ""), action=c.get("action", ""))
@@ -244,8 +260,8 @@ def check_inbox(days: int = 3, label: bool = True, notify_user: bool = True, dry
                     if label and lbl and not dry_run:
                         imap.store(num, "+X-GM-LABELS", f'("{LABEL_ROOT}/{lbl}")')
                     if should_notify and notify_user and not dry_run:
-                        who = row["company"] or parseaddr(sender)[0] or parseaddr(sender)[1]
-                        notify(f"{title}: {who}", row["summary"] or subject, sound=row["category"] in POSITIVE)
+                        who = row["company"] or parseaddr(row["sender"])[0] or parseaddr(row["sender"])[1]
+                        notify(f"{title}: {who}", row["summary"] or row["subject"], sound=row["category"] in POSITIVE)
                         row["notified"] = 1
                     new.append(row)
             if not dry_run:
