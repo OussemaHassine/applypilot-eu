@@ -103,7 +103,9 @@ def _run_enrich(workers: int = 1) -> dict:
     """Stage: Detail enrichment — scrape full descriptions and apply URLs."""
     try:
         from applypilot.enrichment.detail import run_enrichment
-        run_enrichment(workers=workers)
+        # limit=0 = no per-site cap (user rule 2026-11-03: "don't put any limits"); the default of
+        # 100 per site per run had built a backlog of ~1,900 never-enriched postings.
+        run_enrichment(limit=0, workers=workers)
         return {"status": "ok"}
     except Exception as e:
         log.error("Enrichment failed: %s", e)
