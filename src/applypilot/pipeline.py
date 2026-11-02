@@ -125,7 +125,9 @@ def _run_tailor(min_score: int = 7, validation_mode: str = "normal") -> dict:
     """Stage: Resume tailoring — generate tailored resumes for high-fit jobs."""
     try:
         from applypilot.scoring.tailor import run_tailoring
-        run_tailoring(min_score=min_score, validation_mode=validation_mode)
+        # limit=0 = no cap (user rule 2026-11-03: "don't put any limits"). The default of 20 per call
+        # left 70 of 90 scored jobs untailored in a one-shot nightly round. Stream mode re-polls anyway.
+        run_tailoring(min_score=min_score, validation_mode=validation_mode, limit=0)
         return {"status": "ok"}
     except Exception as e:
         log.error("Tailoring failed: %s", e)
@@ -136,7 +138,7 @@ def _run_cover(min_score: int = 7, validation_mode: str = "normal") -> dict:
     """Stage: Cover letter generation."""
     try:
         from applypilot.scoring.cover_letter import run_cover_letters
-        run_cover_letters(min_score=min_score, validation_mode=validation_mode)
+        run_cover_letters(min_score=min_score, validation_mode=validation_mode, limit=0)  # 0 = no cap
         return {"status": "ok"}
     except Exception as e:
         log.error("Cover letter generation failed: %s", e)

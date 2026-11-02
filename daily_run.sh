@@ -16,7 +16,7 @@ LOGDIR="$APPLYPILOT_DIR/logs"
 LOG="$LOGDIR/nightly-$(date +%F).log"
 LOCK="$APPLYPILOT_DIR/.nightly.lock"
 [ -f "$APPLYPILOT_DIR/run_settings.env" ] && source "$APPLYPILOT_DIR/run_settings.env"
-MIN_SCORE="${MIN_SCORE:-7}"; MAX_APPLY="${MAX_APPLY:-60}"; WORKERS="${WORKERS:-2}"; APPLY_MODEL="${APPLY_MODEL:-sonnet}"; HEADLESS="${HEADLESS:-0}"
+MIN_SCORE="${MIN_SCORE:-7}"; MAX_APPLY="${MAX_APPLY:-0}"; WORKERS="${WORKERS:-2}"; APPLY_MODEL="${APPLY_MODEL:-sonnet}"; HEADLESS="${HEADLESS:-0}"
 HEADLESS_FLAG=""; [ "$HEADLESS" = "1" ] && HEADLESS_FLAG="--headless"
 mkdir -p "$LOGDIR"
 

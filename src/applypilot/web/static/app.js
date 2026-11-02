@@ -726,7 +726,7 @@ routes.settings = async (view) => {
     h("div", { class: "form-section" }, h("div", { class: "intro" }, h("h3", {}, "How hard to push"), h("p", {}, "Used by every round, manual or scheduled.")),
       h("div", { class: "fields" },
         h("label", { class: "f wide" }, h("span", {}, "Minimum fit score to apply: ", scoreV, " / 10"), score, h("span", { class: "h" }, "7 = strong match. 6 widens the net to moderate matches; 8 is very selective.")),
-        h("label", { class: "f" }, "Max applications per round", h("input", { type: "number", min: 1, value: run.MAX_APPLY, oninput: (e) => (run.MAX_APPLY = e.target.value) })),
+        h("label", { class: "f" }, "Max applications per round", h("input", { type: "number", min: 0, value: run.MAX_APPLY, oninput: (e) => (run.MAX_APPLY = e.target.value) }), h("span", { class: "h" }, "0 = no limit: apply to every scored job, then stop.")),
         h("label", { class: "f" }, "Browser windows in parallel", h("input", { type: "number", min: 1, max: 4, value: run.WORKERS, oninput: (e) => (run.WORKERS = e.target.value) }), h("span", { class: "h" }, "More is faster but uses your Claude limit sooner.")),
         h("label", { class: "f" }, "Model that fills forms", h("select", { onchange: (e) => (run.APPLY_MODEL = e.target.value) },
           ["sonnet", "haiku", "opus"].map((m) => h("option", { value: m, selected: run.APPLY_MODEL === m ? "selected" : null }, { sonnet: "Sonnet (reliable)", haiku: "Haiku (cheaper, weaker)", opus: "Opus (strongest, slowest)" }[m])))),

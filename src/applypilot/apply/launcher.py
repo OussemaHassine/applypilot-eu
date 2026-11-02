@@ -593,7 +593,8 @@ def _is_permanent_failure(result: str) -> bool:
 def worker_loop(worker_id: int = 0, limit: int = 1,
                 target_url: str | None = None,
                 min_score: int = 7, headless: bool | None = None,
-                model: str = "sonnet", dry_run: bool = False) -> tuple[int, int]:
+                model: str = "sonnet", dry_run: bool = False,
+                continuous: bool = False) -> tuple[int, int]:
     """Run jobs sequentially until limit is reached or queue is empty.
 
     headless=None means: read HEADLESS from run_settings.env before every browser launch,
@@ -601,25 +602,26 @@ def worker_loop(worker_id: int = 0, limit: int = 1,
 
     Args:
         worker_id: Numeric worker identifier.
-        limit: Max jobs to process (0 = continuous).
+        limit: Max jobs to process (0 = no cap: every pending job, then stop when the queue is empty).
         target_url: Apply to a specific URL.
         min_score: Minimum fit_score threshold.
         headless: Run Chrome headless.
         model: Claude model name.
         dry_run: Don't click Submit.
+        continuous: Keep polling for new jobs forever instead of stopping on an empty queue.
 
     Returns:
         Tuple of (applied_count, failed_count).
     """
     applied = 0
     failed = 0
-    continuous = limit == 0
+    unlimited = limit <= 0   # local patch 2026-11-03: 0 = no cap; "forever" is the explicit flag now
     jobs_done = 0
     empty_polls = 0
     port = BASE_CDP_PORT + worker_id
 
     while not _stop_event.is_set():
-        if not continuous and jobs_done >= limit:
+        if not continuous and not unlimited and jobs_done >= limit:
             break
 
         update_state(worker_id, status="idle", job_title="", company="",
@@ -718,7 +720,7 @@ def main(limit: int = 1, target_url: str | None = None,
     """Launch the apply pipeline.
 
     Args:
-        limit: Max jobs to apply to (0 or with continuous=True means run forever).
+        limit: Max jobs to apply to (0 = no cap: all pending jobs, then stop).
         target_url: Apply to a specific URL.
         min_score: Minimum fit_score threshold.
         headless: Run Chrome in headless mode.
@@ -735,12 +737,8 @@ def main(limit: int = 1, target_url: str | None = None,
     config.ensure_dirs()
     console = Console()
 
-    if continuous:
-        effective_limit = 0
-        mode_label = "continuous"
-    else:
-        effective_limit = limit
-        mode_label = f"{limit} jobs"
+    effective_limit = 0 if continuous else limit
+    mode_label = "continuous" if continuous else ("all pending jobs" if limit <= 0 else f"{limit} jobs")
 
     # Initialize dashboard for all workers
     for i in range(workers):
@@ -798,6 +796,7 @@ def main(limit: int = 1, target_url: str | None = None,
                     headless=headless,
                     model=model,
                     dry_run=dry_run,
+                    continuous=continuous,
                 )
             else:
                 # Multi-worker — distribute limit across workers
@@ -807,7 +806,7 @@ def main(limit: int = 1, target_url: str | None = None,
                     limits = [base + (1 if i < extra else 0)
                               for i in range(workers)]
                 else:
-                    limits = [0] * workers  # continuous mode
+                    limits = [0] * workers  # no cap (continuous, or all pending jobs)
 
                 with ThreadPoolExecutor(max_workers=workers,
                                         thread_name_prefix="apply-worker") as executor:
@@ -821,6 +820,7 @@ def main(limit: int = 1, target_url: str | None = None,
                             headless=headless,
                             model=model,
                             dry_run=dry_run,
+                            continuous=continuous,
                         ): i
                         for i in range(workers)
                     }

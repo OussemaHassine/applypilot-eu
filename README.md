@@ -102,7 +102,7 @@ applypilot doctor
 | `profile.json` | Identity, contact, address, per-country location, work rights, notice period, salary rules, languages, extra facts (date of birth, licence…), allowed skills, numbers the CV may quote. **Anything not in this file is never invented**: forms that require it get parked. |
 | `resume_<lang>.txt` | The source of truth for every tailored CV. Add a job, project or skill here and all future CVs include it. |
 | `searches.yaml` | Job titles (a title can carry `markets: [label, ...]` to run only in some markets), markets, freshness, accepted/rejected locations, boards. |
-| `run_settings.env` | `MIN_SCORE`, `MAX_APPLY`, `WORKERS`, `APPLY_MODEL`, `HEADLESS`. |
+| `run_settings.env` | `MIN_SCORE`, `MAX_APPLY` (0 = no limit: every scored job, then stop), `WORKERS`, `APPLY_MODEL`, `HEADLESS`. |
 | `api_keys.env` | `OPENAI_API_KEY` + `LLM_MODEL` (or `GEMINI_API_KEY` / `LLM_URL`), Gmail address + app password. |
 
 ## Web app
@@ -153,7 +153,7 @@ zsh ~/ApplyPilot/daily_run.sh              # one full round: discover → … �
 applypilot run discover                    # or step by step
 applypilot run enrich score tailor cover pdf --min-score 7 --validation strict
 applypilot apply --dry-run --limit 1       # watch one form get filled, nothing submitted
-applypilot apply --limit 30 --workers 2 --model sonnet
+applypilot apply --limit 0 --workers 2 --model sonnet   # 0 = every scored job, then stop
 applypilot apply --continuous              # keep applying as new jobs get tailored
 
 applypilot status                          # counts per stage
