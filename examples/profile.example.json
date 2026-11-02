@@ -1,0 +1,196 @@
+{
+  "_verify_before_apply": [
+    "Example profile. Copy to ~/ApplyPilot/profile.json and replace every value with your own."
+  ],
+  "personal": {
+    "full_name": "Alex Example",
+    "preferred_name": "Alex",
+    "email": "alex.example@gmail.com",
+    "password": "",
+    "phone": "+39 300 0000000",
+    "address": "Via Roma 1",
+    "city": "Bologna",
+    "province_state": "Emilia-Romagna",
+    "country": "Italy",
+    "postal_code": "40100",
+    "linkedin_url": "https://www.linkedin.com/in/alex-example",
+    "github_url": "",
+    "portfolio_url": "",
+    "website_url": "",
+    "current_job_title": "QA Engineer",
+    "location_by_country": {
+      "default": {
+        "city": "Bologna",
+        "province_state": "Emilia-Romagna",
+        "country": "Italy",
+        "address": "Via Roma 1",
+        "postal_code": "40100",
+        "label": {
+          "en": "Bologna, Italy",
+          "fr": "Bologne, Italie",
+          "it": "Bologna, Italia"
+        }
+      },
+      "FR": {
+        "city": "Lyon",
+        "province_state": "Rhône",
+        "country": "France",
+        "address": "",
+        "postal_code": "",
+        "label": {
+          "en": "Lyon, France",
+          "fr": "Lyon, France",
+          "it": "Lione, Francia"
+        }
+      },
+      "GULF": {
+        "city": "Bologna",
+        "province_state": "Emilia-Romagna",
+        "country": "Italy",
+        "address": "Via Roma 1",
+        "postal_code": "40100",
+        "label": {
+          "en": "Bologna, Italy",
+          "fr": "Bologne, Italie",
+          "it": "Bologna, Italia"
+        }
+      }
+    },
+    "extra_facts": {
+      "nationality": "Italian",
+      "date_of_birth": "1 January 1998",
+      "driving_licence": "Yes, category B"
+    }
+  },
+  "work_authorization": {
+    "legally_authorized_to_work": "Yes, authorized to work in Europe",
+    "require_sponsorship": "No",
+    "work_permit_type": "Authorized to work in Europe; no visa sponsorship required"
+  },
+  "availability": {
+    "earliest_start_date": "Available with 2 weeks notice",
+    "available_for_full_time": "Yes",
+    "available_for_contract": "Yes",
+    "relocation": "Currently in Urbino, Italy; open to relocation anywhere in Europe and to fully remote roles"
+  },
+  "compensation": {
+    "salary_expectation": "40000",
+    "salary_currency": "EUR",
+    "salary_range_min": "30000",
+    "salary_range_max": "45000",
+    "salary_notes": "40000 EUR in higher-salary European countries (Germany, France, Netherlands, Belgium, Luxembourg, Austria, Switzerland, Ireland, United Kingdom, Nordics, Italy); 30000 EUR in lower-salary European countries (Spain, Portugal, Greece, Poland, Czechia, Hungary, Romania, Bulgaria, Croatia, Baltics, Balkans); 25000 EUR per year (about 12 EUR/hour or 110 EUR/day) for freelance or contractor roles; Gulf countries (UAE, Qatar, Saudi Arabia): 40000 EUR equivalent per year, quoted in local currency.",
+    "currency_conversion_note": "Figures are EUR gross per year; convert to the posting's currency when needed"
+  },
+  "experience": {
+    "years_of_experience_total": "3",
+    "education_level": "Master's Degree (completed 2026)",
+    "current_title": "Quality Assurance Engineer",
+    "current_job_title": "Quality Assurance Engineer",
+    "current_company": "Example SaaS Ltd",
+    "target_role": "QA Automation Engineer"
+  },
+  "skills_boundary": {
+    "testing_and_qa": [
+      "Manual testing",
+      "Automated testing",
+      "Functional testing",
+      "Regression testing",
+      "UAT",
+      "UX testing",
+      "Test strategy",
+      "Test case design",
+      "Root-cause analysis",
+      "Requirement-to-test traceability",
+      "Shift-left QA",
+      "Testing AI-driven features (conversation flows, edge cases)",
+      "BDD basics (Gherkin, Cucumber)"
+    ],
+    "automation_and_qa_tools": [
+      "Playwright (JavaScript)",
+      "Playwright MCP",
+      "Selenium (Python)",
+      "Postman (API testing)",
+      "REST API testing",
+      "Jira",
+      "Xray",
+      "GitLab CI",
+      "Allure",
+      "Git",
+      "n8n"
+    ],
+    "programming_languages": [
+      "Python",
+      "JavaScript"
+    ],
+    "ai_and_automation": [
+      "OpenAI API",
+      "GPT-4o-mini",
+      "gpt-image-1",
+      "Suno API",
+      "YouTube API",
+      "AI agent built with Playwright MCP",
+      "Handling non-determinism of LLM outputs",
+      "RASA",
+      "Workflow automation",
+      "Web scraping (Playwright, Python)",
+      "FFmpeg"
+    ],
+    "engineering_and_ops": [
+      "API integration and orchestration",
+      "Slack integration (bot command, chatbot)",
+      "CSV export",
+      "Regex",
+      "Deduplication and email validation"
+    ],
+    "methodologies": [
+      "Agile",
+      "Scrum",
+      "Shift-left refinement",
+      "Stakeholder communication",
+      "Mentoring and onboarding QA team members",
+      "Test strategy definition"
+    ],
+    "spoken_languages": [
+      "Arabic (native)",
+      "English (C1)",
+      "French (C1)",
+      "Italian (B1)"
+    ],
+    "certifications": [
+      "ISTQB Foundation (in progress)"
+    ]
+  },
+  "resume_facts": {
+    "preserved_companies": [
+      "Example SaaS Ltd",
+      "Previous Co"
+    ],
+    "preserved_projects": [
+      "Test Automation Framework"
+    ],
+    "preserved_school": "University of Bologna",
+    "real_metrics": [
+      "3+ years of experience",
+      "English (C1)"
+    ]
+  },
+  "eeo_voluntary": {
+    "gender": "Decline to self-identify",
+    "race_ethnicity": "Decline to self-identify",
+    "veteran_status": "Decline to self-identify",
+    "disability_status": "Decline to self-identify"
+  },
+  "languages": {
+    "_help": "How your languages appear on CVs and forms. 'listed' is shown everywhere (one line per CV language). 'gulf_only' is added only for jobs in UAE/Qatar/Saudi and neighbours. Any language not listed is answered as 'none'.",
+    "listed": {
+      "en": "English (C1), French (C1), Italian (B1)",
+      "fr": "Anglais (C1), Français (C1), Italien (B1)",
+      "it": "inglese (C1), francese (C1), italiano (B1)"
+    },
+    "gulf_only": {
+      "en": "Arabic (native)",
+      "fr": "Arabe (natif)",
+      "it": "arabo (madrelingua)"
+    }
+  }
+}

@@ -257,6 +257,53 @@ def apply(
 
 
 @app.command()
+def inbox(
+    days: int = typer.Option(3, "--days", "-d", help="How many days of mail to scan."),
+    watch: bool = typer.Option(False, "--watch", help="Keep running and re-check every --interval minutes."),
+    interval: int = typer.Option(10, "--interval", help="Minutes between checks in --watch mode."),
+    no_label: bool = typer.Option(False, "--no-label", help="Do not add ApplyPilot/* labels in Gmail."),
+    no_notify: bool = typer.Option(False, "--no-notify", help="Do not show macOS notifications."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Classify and print only: no labels, notifications or saving."),
+    show: bool = typer.Option(False, "--show", help="Print all stored responses and exit (no Gmail access)."),
+) -> None:
+    """Read Gmail, find replies from companies, label them and notify you."""
+    _bootstrap()
+    import time
+    from rich.table import Table
+    from applypilot.inbox import check_inbox, write_digest, CATEGORIES
+
+    if show:
+        path = write_digest()
+        console.print(open(path, encoding="utf-8").read())
+        return
+
+    def once() -> None:
+        try:
+            new = check_inbox(days=days, label=not no_label, notify_user=not no_notify, dry_run=dry_run)
+        except Exception as exc:
+            console.print(f"[red]Inbox check failed:[/red] {exc}")
+            return
+        stamp = time.strftime("%H:%M")
+        if not new:
+            console.print(f"[dim]{stamp} no new job emails[/dim]")
+            return
+        t = Table(title=f"{stamp} new job emails")
+        for col in ("Category", "Company", "Summary", "To do"):
+            t.add_column(col, overflow="fold")
+        for r in new:
+            t.add_row(CATEGORIES.get(r["category"], (r["category"],))[0] or r["category"],
+                      r["company"] or r["sender"][:30], r["summary"], r["action"] or "")
+        console.print(t)
+        if not dry_run:
+            console.print("[dim]All responses: ~/ApplyPilot/responses.md[/dim]")
+
+    once()
+    while watch:
+        time.sleep(max(1, interval) * 60)
+        once()
+
+
+@app.command()
 def status() -> None:
     """Show pipeline statistics from the database."""
     _bootstrap()
@@ -393,7 +440,7 @@ def doctor() -> None:
         results.append(("LLM API key", ok_mark, f"Local: {os.environ.get('LLM_URL')}"))
     else:
         results.append(("LLM API key", fail_mark,
-                        "Set GEMINI_API_KEY in ~/.applypilot/.env (run 'applypilot init')"))
+                        f"Set GEMINI_API_KEY in {ENV_PATH} (or run 'applypilot init')"))
 
     # --- Tier 3 checks ---
     # Claude Code CLI

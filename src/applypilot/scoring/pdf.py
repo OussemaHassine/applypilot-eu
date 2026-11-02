@@ -5,9 +5,11 @@ and exports to PDF using headless Chromium via Playwright.
 """
 
 import logging
+import os
 from pathlib import Path
 
 from applypilot.config import TAILORED_DIR
+from applypilot.lang import DEFAULT_LANG, SECTION_TITLES, detect_text_language
 
 log = logging.getLogger(__name__)
 
@@ -148,16 +150,18 @@ def parse_entries(text: str) -> list[dict]:
 
 # ── HTML Template ────────────────────────────────────────────────────────
 
-def build_html(resume: dict) -> str:
+def build_html(resume: dict, lang: str | None = None) -> str:
     """Build professional resume HTML from parsed data.
 
     Args:
         resume: Parsed resume dict from parse_resume().
+        lang: Language code for the printed section titles (en / fr / it).
 
     Returns:
         Complete HTML string ready for PDF rendering.
     """
     sections = resume["sections"]
+    titles = SECTION_TITLES.get(lang or DEFAULT_LANG, SECTION_TITLES[DEFAULT_LANG])
 
     # Skills
     skills_html = ""
@@ -166,7 +170,7 @@ def build_html(resume: dict) -> str:
         rows = ""
         for cat, val in skills:
             rows += f'<div class="skill-row"><span class="skill-cat">{cat}:</span> {val}</div>\n'
-        skills_html = f'<div class="section"><div class="section-title">Technical Skills</div>{rows}</div>'
+        skills_html = f'<div class="section"><div class="section-title">{titles["TECHNICAL SKILLS"]}</div>{rows}</div>'
 
     # Experience
     exp_html = ""
@@ -177,7 +181,7 @@ def build_html(resume: dict) -> str:
             bullets = "".join(f"<li>{b}</li>" for b in e["bullets"])
             subtitle = f'<div class="entry-subtitle">{e["subtitle"]}</div>' if e["subtitle"] else ""
             items += f'<div class="entry"><div class="entry-title">{e["title"]}</div>{subtitle}<ul>{bullets}</ul></div>'
-        exp_html = f'<div class="section"><div class="section-title">Experience</div>{items}</div>'
+        exp_html = f'<div class="section"><div class="section-title">{titles["EXPERIENCE"]}</div>{items}</div>'
 
     # Projects
     proj_html = ""
@@ -188,18 +192,18 @@ def build_html(resume: dict) -> str:
             bullets = "".join(f"<li>{b}</li>" for b in e["bullets"])
             subtitle = f'<div class="entry-subtitle">{e["subtitle"]}</div>' if e["subtitle"] else ""
             items += f'<div class="entry"><div class="entry-title">{e["title"]}</div>{subtitle}<ul>{bullets}</ul></div>'
-        proj_html = f'<div class="section"><div class="section-title">Projects</div>{items}</div>'
+        proj_html = f'<div class="section"><div class="section-title">{titles["PROJECTS"]}</div>{items}</div>'
 
     # Education
     edu_html = ""
     if "EDUCATION" in sections:
-        edu_text = sections["EDUCATION"].strip()
-        edu_html = f'<div class="section"><div class="section-title">Education</div><div class="edu">{edu_text}</div></div>'
+        edu_text = sections["EDUCATION"].strip().replace("\n", "<br>")
+        edu_html = f'<div class="section"><div class="section-title">{titles["EDUCATION"]}</div><div class="edu">{edu_text}</div></div>'
 
     # Summary
     summary_html = ""
     if "SUMMARY" in sections:
-        summary_html = f'<div class="section"><div class="section-title">Summary</div><div class="summary">{sections["SUMMARY"].strip()}</div></div>'
+        summary_html = f'<div class="section"><div class="section-title">{titles["SUMMARY"]}</div><div class="summary">{sections["SUMMARY"].strip()}</div></div>'
 
     # Contact line parsing
     contact = resume["contact"]
@@ -331,6 +335,36 @@ li {{
 </html>"""
 
 
+def is_letter(text: str) -> bool:
+    """True when the text is a cover letter rather than a structured resume."""
+    upper_lines = {line.strip().upper() for line in text.splitlines()}
+    return "SUMMARY" not in upper_lines and "TECHNICAL SKILLS" not in upper_lines
+
+
+def build_letter_html(text: str) -> str:
+    """Render a plain-text cover letter as simple paragraphs."""
+    import html as _html
+
+    paragraphs = [p.strip() for p in text.strip().split("\n\n") if p.strip()]
+    body = "".join(
+        "<p>" + _html.escape(p).replace("\n", "<br>") + "</p>" for p in paragraphs
+    )
+    return f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+@page {{ size: A4; margin: 1in 1in; }}
+body {{ font-family: 'Calibri', 'Segoe UI', Arial, sans-serif; font-size: 11pt; line-height: 1.5; color: #1a1a1a; }}
+p {{ margin: 0 0 12pt 0; }}
+</style>
+</head>
+<body>
+{body}
+</body>
+</html>"""
+
+
 # ── PDF Renderer ─────────────────────────────────────────────────────────
 
 def render_pdf(html: str, output_path: str) -> None:
@@ -358,7 +392,8 @@ def render_pdf(html: str, output_path: str) -> None:
 # ── Public API ───────────────────────────────────────────────────────────
 
 def convert_to_pdf(
-    text_path: Path, output_path: Path | None = None, html_only: bool = False
+    text_path: Path, output_path: Path | None = None, html_only: bool = False,
+    lang: str | None = None,
 ) -> Path:
     """Convert a text resume/cover letter to PDF.
 
@@ -367,14 +402,21 @@ def convert_to_pdf(
         output_path: Optional override for the output path. Defaults to same
             name with .pdf extension.
         html_only: If True, output HTML instead of PDF.
+        lang: Language for section titles (en / fr / it). Detected from the
+            text when omitted.
 
     Returns:
         Path to the generated PDF (or HTML) file.
     """
     text_path = Path(text_path)
     text = text_path.read_text(encoding="utf-8")
-    resume = parse_resume(text)
-    html = build_html(resume)
+    if lang is None:
+        lang = detect_text_language(text) or DEFAULT_LANG
+    if is_letter(text):
+        html = build_letter_html(text)
+    else:
+        resume = parse_resume(text)
+        html = build_html(resume, lang)
 
     if html_only:
         out = output_path or text_path.with_suffix(".html")
@@ -385,9 +427,53 @@ def convert_to_pdf(
 
     out = output_path or text_path.with_suffix(".pdf")
     out = Path(out)
+    if not is_letter(text) and os.environ.get("APPLYPILOT_RESUME_RENDERER", "latex") == "latex":
+        try:
+            from applypilot.scoring.latex_resume import render_latex_resume
+            titles = SECTION_TITLES.get(lang or DEFAULT_LANG, SECTION_TITLES[DEFAULT_LANG])
+            if render_latex_resume(resume, titles, out, parse_skills, parse_entries, count_pages):
+                log.info("PDF generated (LaTeX): %s", out)
+                return out
+        except Exception:
+            log.warning("LaTeX renderer crashed; falling back to HTML", exc_info=True)
     render_pdf(html, str(out))
-    log.info("PDF generated: %s", out)
+    if not is_letter(text):
+        _enforce_one_page(html, out)
+    log.info("PDF generated (HTML): %s", out)
     return out
+
+
+MAX_PAGES = 1
+_SHRINK_STEPS = (0.95, 0.9, 0.86, 0.82, 0.78, 0.74, 0.7)
+
+
+def count_pages(pdf_path: Path) -> int:
+    """Number of pages in a PDF (0 when unreadable)."""
+    try:
+        from pypdf import PdfReader
+        return len(PdfReader(str(pdf_path)).pages)
+    except Exception:
+        log.debug("Could not count pages of %s", pdf_path, exc_info=True)
+        return 0
+
+
+def _enforce_one_page(html: str, out: Path) -> None:
+    """Re-render with progressively smaller zoom until the resume fits on one page.
+
+    The user's resumes must stay one page. Chromium honours CSS zoom when
+    printing, so shrinking the whole document keeps the layout intact.
+    """
+    pages = count_pages(out)
+    if pages <= MAX_PAGES:
+        return
+    for zoom in _SHRINK_STEPS:
+        shrunk = html.replace("</head>", f"<style>html {{ zoom: {zoom}; }}</style></head>", 1)
+        render_pdf(shrunk, str(out))
+        pages = count_pages(out)
+        if pages <= MAX_PAGES:
+            log.info("Resume shrunk to zoom %.2f to fit one page: %s", zoom, out.name)
+            return
+    log.warning("Resume still %d pages at minimum zoom: %s", pages, out.name)
 
 
 def batch_convert(limit: int = 50) -> int:

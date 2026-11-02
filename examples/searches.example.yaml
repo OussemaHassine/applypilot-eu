@@ -1,0 +1,421 @@
+# ApplyPilot search configuration (example) (updated 2026-11-02: anywhere in Europe or remote).
+# Keys below are the ones the code actually reads (the shipped example is partly stale).
+# Edit freely, then re-run: applypilot run discover
+
+defaults:
+  country_indeed: "italy"   # default Indeed country site; per-location override below
+  results_per_site: 25      # per board per query per location
+  hours_old: 72             # only postings from the last 3 days (use 24 for daily runs)
+
+# Boards. zip_recruiter is US/Canada only, so it is left out.
+sites:
+  - indeed
+  - linkedin
+  # glassdoor removed 2026-11-02: ApplyPilot blocks glassdoor URLs from enrichment and apply,
+  # so its 960+ results were dead weight (and the board rate-limits the crawler).
+  - google
+
+# Tier 1 = core QA roles, Tier 2 = adjacent + AI roles, Tier 3 = wide net.
+# Workday portals only use tiers <= workday_max_tier.
+queries:
+  - { query: "QA Engineer", tier: 1 }
+  - { query: "QA Automation Engineer", tier: 1 }
+  - { query: "Test Automation Engineer", tier: 1 }
+  - { query: "Software Test Engineer", tier: 1 }
+  - { query: "SDET", tier: 1 }
+  - { query: "Quality Assurance Engineer", tier: 1 }
+  - { query: "Software Tester", tier: 2 }
+  - { query: "Playwright automation", tier: 2 }
+  - { query: "AI QA Engineer", tier: 2 }
+  - { query: "Ingénieur QA", tier: 2 }
+  - { query: "Testeur logiciel", tier: 2 }
+  - { query: "Automation Engineer", tier: 3 }
+  - { query: "Quality Engineer", tier: 3 }
+  - { query: "AI Engineer", tier: 3 }
+  - { query: "LLM Engineer", tier: 3 }
+  # Added 2026-11-02 04:50 after the first pool was exhausted (69 applications)
+  - { query: "Test Engineer", tier: 1 }
+  - { query: "QA Analyst", tier: 1 }
+  - { query: "Test Analyst", tier: 1 }
+  - { query: "QA Specialist", tier: 2 }
+  - { query: "Software QA", tier: 2 }
+  - { query: "Test Automation", tier: 2 }
+  - { query: "AI Test Engineer", tier: 2 }
+  - { query: "Ingegnere QA", tier: 2 }
+  - { query: "Ingeniero QA", tier: 2 }
+  - { query: "Quality Analyst", tier: 3 }
+
+# Each query runs once per location. Country searches use remote: false so they return
+# onsite, hybrid AND remote postings; the EU search adds a remote-only sweep.
+# country_indeed picks the Indeed country site (local patch in discovery/jobspy.py).
+locations:
+  - { location: "Italy", remote: false, label: "italy", country_indeed: "italy" }
+  - { location: "France", remote: false, label: "france", country_indeed: "france" }
+  - { location: "Germany", remote: false, label: "germany", country_indeed: "germany" }
+  - { location: "Netherlands", remote: false, label: "netherlands", country_indeed: "netherlands" }
+  - { location: "Spain", remote: false, label: "spain", country_indeed: "spain" }
+  - { location: "Portugal", remote: false, label: "portugal", country_indeed: "portugal" }
+  - { location: "Belgium", remote: false, label: "belgium", country_indeed: "belgium" }
+  - { location: "Ireland", remote: false, label: "ireland", country_indeed: "ireland" }
+  - { location: "Switzerland", remote: false, label: "switzerland", country_indeed: "switzerland" }
+  - { location: "Austria", remote: false, label: "austria", country_indeed: "austria" }
+  - { location: "Poland", remote: false, label: "poland", country_indeed: "poland" }
+  - { location: "Sweden", remote: false, label: "sweden", country_indeed: "sweden" }
+  - { location: "Denmark", remote: false, label: "denmark", country_indeed: "denmark" }
+  - { location: "United Kingdom", remote: false, label: "uk", country_indeed: "uk" }
+  - { location: "European Union", remote: true, label: "eu-remote", country_indeed: "italy" }
+  # More European markets 
+  - { location: "Norway", remote: false, label: "norway", country_indeed: "norway" }
+  - { location: "Finland", remote: false, label: "finland", country_indeed: "finland" }
+  - { location: "Czech Republic", remote: false, label: "czechia", country_indeed: "czechrepublic" }
+  - { location: "Hungary", remote: false, label: "hungary", country_indeed: "hungary" }
+  - { location: "Romania", remote: false, label: "romania", country_indeed: "romania" }
+  - { location: "Greece", remote: false, label: "greece", country_indeed: "greece" }
+  - { location: "Luxembourg", remote: false, label: "luxembourg", country_indeed: "luxembourg" }
+  # Gulf 
+  - { location: "United Arab Emirates", remote: false, label: "uae", country_indeed: "unitedarabemirates" }
+  - { location: "Qatar", remote: false, label: "qatar", country_indeed: "qatar" }
+  - { location: "Saudi Arabia", remote: false, label: "saudi", country_indeed: "saudiarabia" }
+
+# Glassdoor needs simplified location strings.
+glassdoor_location_map:
+  "Italy": "Italy"
+  "France": "France"
+  "Germany": "Germany"
+  "Netherlands": "Netherlands"
+  "Spain": "Spain"
+  "Portugal": "Portugal"
+  "Belgium": "Belgium"
+  "Ireland": "Ireland"
+  "Switzerland": "Switzerland"
+  "Austria": "Austria"
+  "Poland": "Poland"
+  "Sweden": "Sweden"
+  "Denmark": "Denmark"
+  "United Kingdom": "United Kingdom"
+  "European Union": "Italy"
+  "United Arab Emirates": "United Arab Emirates"
+  "Qatar": "Qatar"
+  "Saudi Arabia": "Saudi Arabia"
+
+# Discovery-time location filter. Reject patterns are checked first (even for "remote" postings,
+# so "Remote - US" is dropped). Non-remote postings must then match an accept pattern.
+# Anywhere in Europe is acceptable.
+location_accept:
+  # regions
+  - "Europe"
+  - "EMEA"
+  - "EU"
+  - "European Union"
+  - "Schengen"
+  # Gulf
+  - "United Arab Emirates"
+  - "UAE"
+  - "Dubai"
+  - "Abu Dhabi"
+  - "Qatar"
+  - "Doha"
+  - "Saudi Arabia"
+  - "Riyadh"
+  - "Jeddah"
+  - "KSA"
+  - "GCC"
+  - "Gulf"
+  # ISO country codes as they appear in some postings (whole-word match)
+  - "IT"
+  - "FR"
+  - "DE"
+  - "NL"
+  - "ES"
+  - "PT"
+  - "BE"
+  - "IE"
+  - "CH"
+  - "AT"
+  - "PL"
+  - "SE"
+  - "DK"
+  - "GB"
+  - "LU"
+  - "CZ"
+  - "HU"
+  - "RO"
+  - "GR"
+  - "NO"
+  - "FI"
+  # countries (English + local names)
+  - "Italy"
+  - "Italia"
+  - "France"
+  - "Germany"
+  - "Deutschland"
+  - "Netherlands"
+  - "Nederland"
+  - "Belgium"
+  - "Belgique"
+  - "België"
+  - "Luxembourg"
+  - "Spain"
+  - "España"
+  - "Portugal"
+  - "Ireland"
+  - "United Kingdom"
+  - "UK"
+  - "England"
+  - "Scotland"
+  - "Wales"
+  - "Switzerland"
+  - "Schweiz"
+  - "Suisse"
+  - "Svizzera"
+  - "Austria"
+  - "Österreich"
+  - "Poland"
+  - "Polska"
+  - "Czech"
+  - "Czechia"
+  - "Slovakia"
+  - "Hungary"
+  - "Romania"
+  - "Bulgaria"
+  - "Croatia"
+  - "Slovenia"
+  - "Serbia"
+  - "Greece"
+  - "Sweden"
+  - "Sverige"
+  - "Denmark"
+  - "Danmark"
+  - "Norway"
+  - "Norge"
+  - "Finland"
+  - "Suomi"
+  - "Estonia"
+  - "Latvia"
+  - "Lithuania"
+  - "Malta"
+  - "Cyprus"
+  # cities
+  - "Urbino"
+  - "Pesaro"
+  - "Marche"
+  - "Milan"
+  - "Milano"
+  - "Lombardy"
+  - "Lombardia"
+  - "Rome"
+  - "Roma"
+  - "Turin"
+  - "Torino"
+  - "Bologna"
+  - "Naples"
+  - "Napoli"
+  - "Florence"
+  - "Firenze"
+  - "Padova"
+  - "Verona"
+  - "Genova"
+  - "Paris"
+  - "Lyon"
+  - "Marseille"
+  - "Toulouse"
+  - "Nice"
+  - "Sophia Antipolis"
+  - "Nantes"
+  - "Bordeaux"
+  - "Lille"
+  - "Grenoble"
+  - "Berlin"
+  - "Munich"
+  - "München"
+  - "Hamburg"
+  - "Frankfurt"
+  - "Cologne"
+  - "Köln"
+  - "Stuttgart"
+  - "Düsseldorf"
+  - "Amsterdam"
+  - "Rotterdam"
+  - "Utrecht"
+  - "Eindhoven"
+  - "The Hague"
+  - "Brussels"
+  - "Bruxelles"
+  - "Antwerp"
+  - "Ghent"
+  - "Madrid"
+  - "Barcelona"
+  - "Valencia"
+  - "Malaga"
+  - "Lisbon"
+  - "Lisboa"
+  - "Porto"
+  - "Dublin"
+  - "Cork"
+  - "London"
+  - "Manchester"
+  - "Edinburgh"
+  - "Birmingham"
+  - "Zurich"
+  - "Zürich"
+  - "Geneva"
+  - "Genève"
+  - "Basel"
+  - "Lausanne"
+  - "Vienna"
+  - "Wien"
+  - "Warsaw"
+  - "Warszawa"
+  - "Krakow"
+  - "Kraków"
+  - "Wrocław"
+  - "Wroclaw"
+  - "Gdańsk"
+  - "Gdansk"
+  - "Prague"
+  - "Praha"
+  - "Brno"
+  - "Budapest"
+  - "Bucharest"
+  - "Sofia"
+  - "Zagreb"
+  - "Ljubljana"
+  - "Bratislava"
+  - "Athens"
+  - "Stockholm"
+  - "Gothenburg"
+  - "Copenhagen"
+  - "København"
+  - "Oslo"
+  - "Helsinki"
+  - "Tallinn"
+  - "Riga"
+  - "Vilnius"
+location_reject_non_remote:
+  - "United States"
+  - "USA"
+  - "US"
+  - "Canada"
+  - "LATAM"
+  - "Latin America"
+  - "Mexico"
+  - "Brazil"
+  - "Argentina"
+  - "Colombia"
+  - "Chile"
+  - "Peru"
+  - "India"
+  - "Pakistan"
+  - "Bangladesh"
+  - "Philippines"
+  - "Vietnam"
+  - "Indonesia"
+  - "Malaysia"
+  - "Singapore"
+  - "China"
+  - "Japan"
+  - "APAC"
+  - "Australia"
+  - "New Zealand"
+  - "Egypt"
+  - "Nigeria"
+  - "South Africa"
+  # US states and Canadian provinces (postings often omit the country)
+  - "Alabama"
+  - "Alaska"
+  - "Arizona"
+  - "Arkansas"
+  - "California"
+  - "Colorado"
+  - "Connecticut"
+  - "Delaware"
+  - "Florida"
+  - "Hawaii"
+  - "Idaho"
+  - "Illinois"
+  - "Indiana"
+  - "Iowa"
+  - "Kansas"
+  - "Kentucky"
+  - "Louisiana"
+  - "Maine"
+  - "Maryland"
+  - "Massachusetts"
+  - "Michigan"
+  - "Minnesota"
+  - "Mississippi"
+  - "Missouri"
+  - "Montana"
+  - "Nebraska"
+  - "Nevada"
+  - "New Hampshire"
+  - "New Jersey"
+  - "New Mexico"
+  - "New York"
+  - "North Carolina"
+  - "North Dakota"
+  - "Ohio"
+  - "Oklahoma"
+  - "Oregon"
+  - "Pennsylvania"
+  - "Rhode Island"
+  - "South Carolina"
+  - "South Dakota"
+  - "Tennessee"
+  - "Texas"
+  - "Utah"
+  - "Vermont"
+  - "Virginia"
+  - "Wisconsin"
+  - "Wyoming"
+  - "Ontario"
+  - "Quebec"
+  - "Québec"
+  - "British Columbia"
+  - "Alberta"
+  - "Manitoba"
+  - "Saskatchewan"
+  - "Nova Scotia"
+  - "Toronto"
+  - "Vancouver"
+  - "Montreal"
+  - "Montréal"
+  - "on-site only"
+  - "onsite only"
+
+# Apply-time location check (used by the Claude browser agent). Remote jobs are always eligible.
+# Hybrid/onsite jobs are eligible anywhere in Europe (open to relocation).
+location:
+  primary: "Bologna, Italy"
+  accept_patterns:
+    - "anywhere in Europe (open to relocation)"
+    - "Italy"
+    - "France"
+    - "Germany"
+    - "Netherlands"
+    - "Belgium"
+    - "Luxembourg"
+    - "Spain"
+    - "Portugal"
+    - "Ireland"
+    - "United Kingdom"
+    - "Switzerland"
+    - "Austria"
+    - "Poland"
+    - "Czechia"
+    - "Hungary"
+    - "Romania"
+    - "Greece"
+    - "Sweden"
+    - "Denmark"
+    - "Norway"
+    - "Finland"
+    - "Baltics"
+    - "Balkans"
+    - "United Arab Emirates"
+    - "Qatar"
+    - "Saudi Arabia"
+
+workday_max_tier: 1
+workday_location_filter: true
+

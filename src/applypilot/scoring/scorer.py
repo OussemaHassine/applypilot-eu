@@ -34,6 +34,9 @@ IMPORTANT FACTORS:
 - Consider transferable experience (automation, scripting, API work)
 - Factor in the candidate's project experience
 - Be realistic about experience level vs. job requirements (years of experience, seniority)
+- Internships, apprenticeships, PhD/doctoral positions (Doktorand, dottorato, doctorant), student or entry-level-only roles (stage, tirocinio, stagiaire, alternance, Werkstudent, Praktikum, intern) are a poor fit for a candidate with several years of experience: score at most 4
+- Senior/Lead/Staff/Principal/Manager roles that require clearly more years than the candidate has: score at most 5
+- Roles outside software QA, test automation, SDET or AI-feature quality (e.g. hardware, firmware, pharma validation, manufacturing quality, network engineering): score at most 4 unless the skills clearly transfer
 
 RESPOND IN EXACTLY THIS FORMAT (no other text):
 SCORE: [1-10]
@@ -152,14 +155,14 @@ def run_scoring(limit: int = 0, rescore: bool = False) -> dict:
             completed, len(jobs), result["score"], job.get("title", "?")[:60],
         )
 
-    # Write scores to DB
-    now = datetime.now(timezone.utc).isoformat()
-    for r in results:
+        # Write each score immediately so downstream stages (and a crash) never
+        # lose a whole pass, and so the write lock is held for microseconds.
         conn.execute(
             "UPDATE jobs SET fit_score = ?, score_reasoning = ?, scored_at = ? WHERE url = ?",
-            (r["score"], f"{r['keywords']}\n{r['reasoning']}", now, r["url"]),
+            (result["score"], f"{result['keywords']}\n{result['reasoning']}",
+             datetime.now(timezone.utc).isoformat(), result["url"]),
         )
-    conn.commit()
+        conn.commit()
 
     elapsed = time.time() - t0
     log.info("Done: %d scored in %.1fs (%.1f jobs/sec)", len(results), elapsed, len(results) / elapsed if elapsed > 0 else 0)

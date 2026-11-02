@@ -11,14 +11,23 @@ import re
 import time
 from datetime import datetime, timezone
 
-from applypilot.config import COVER_LETTER_DIR, RESUME_PATH, load_profile
+from applypilot.config import COVER_LETTER_DIR, load_profile, load_resume_text
+from applypilot.location import localize_resume_header, resolve_candidate_location
 from applypilot.database import get_connection, get_jobs_by_stage
+from applypilot.lang import (
+    COVER_SALUTATIONS,
+    DEFAULT_LANG,
+    LANG_NAMES,
+    SALUTATION_PREFIXES,
+    detect_job_language,
+)
 from applypilot.llm import get_client
 from applypilot.scoring.validator import (
     BANNED_WORDS,
     LLM_LEAK_PHRASES,
     sanitize_text,
     validate_cover_letter,
+    find_new_numbers,
 )
 
 log = logging.getLogger(__name__)
@@ -28,7 +37,7 @@ MAX_ATTEMPTS = 5  # max cross-run retries before giving up
 
 # ── Prompt Builder (profile-driven) ──────────────────────────────────────
 
-def _build_cover_letter_prompt(profile: dict) -> str:
+def _build_cover_letter_prompt(profile: dict, lang: str = DEFAULT_LANG, location: dict | None = None) -> str:
     """Build the cover letter system prompt from the user's profile.
 
     All personal data, skills, and sign-off name come from the profile.
@@ -39,6 +48,7 @@ def _build_cover_letter_prompt(profile: dict) -> str:
 
     # Preferred name for the sign-off (falls back to full name)
     sign_off_name = personal.get("preferred_name") or personal.get("full_name", "")
+    full_name = personal.get("full_name") or sign_off_name
 
     # Flatten all allowed skills
     all_skills: list[str] = []
@@ -64,14 +74,28 @@ def _build_cover_letter_prompt(profile: dict) -> str:
     # with what will actually be rejected — the validator checks all of these.
     all_banned = ", ".join(f'"{w}"' for w in BANNED_WORDS)
     leak_banned = ", ".join(f'"{p}"' for p in LLM_LEAK_PHRASES)
+    lang_name = LANG_NAMES.get(lang, "English")
+    salutation = COVER_SALUTATIONS.get(lang, COVER_SALUTATIONS["en"])
+    location_line = ""
+    if location:
+        from applypilot.location import spoken_languages_for
+        arabic_rule = "" if location.get("mention_arabic") else " Never mention Arabic."
+        location_line = (
+            f"\nLOCATION: {sign_off_name} is currently based in {location['label']} and open to relocation anywhere "
+            f"in Europe and to remote roles. Mention this only if the posting makes location relevant; never name another city.\n"
+            f"LANGUAGES: {spoken_languages_for(location, lang)}.{arabic_rule}\n"
+        )
 
     return f"""Write a cover letter for {sign_off_name}. The goal is to get an interview.
 
+LANGUAGE: Write the entire letter in {lang_name}, the language of the job posting. Keep tool, product and company names as they are. Use natural {lang_name} business-letter phrasing, including the closing line.
+
 STRUCTURE: 3 short paragraphs. Under 250 words. Every sentence must earn its place.
+{location_line}
 
 PARAGRAPH 1 (2-3 sentences): Open with a specific thing YOU built that solves THEIR problem. Not "I'm excited about this role." Not "This role aligns with my experience." Start with the work.
 
-PARAGRAPH 2 (3-4 sentences): Pick 2 achievements from the resume that are MOST relevant to THIS job. Use numbers. Frame as solving their problem, not listing your accomplishments.{projects_hint}{metrics_hint}
+PARAGRAPH 2 (3-4 sentences): Pick 2 achievements from the resume that are MOST relevant to THIS job. Use a number only if it appears in the resume; if an achievement has no number, describe it without one. Frame as solving their problem, not listing your accomplishments.{projects_hint}{metrics_hint}
 
 PARAGRAPH 3 (1-2 sentences): One specific thing about the company from the job description (a product, a technical challenge, a team structure). Then close. "Happy to walk through any of this in more detail." or "Let's discuss." Nothing else.
 
@@ -87,31 +111,36 @@ VOICE:
 - Write like a real engineer emailing someone they respect. Not formal, not casual. Just direct.
 - NEVER narrate or explain what you're doing. BAD: "This demonstrates my commitment to X." GOOD: Just state the fact and move on.
 - NEVER hedge. BAD: "might address some of your challenges." GOOD: "solves the same problem your team is facing."
-- Every sentence should contain either a number, a tool name, or a specific outcome. If it doesn't, cut it.
+- Every sentence should contain a tool name from the resume, a real outcome from the resume, or a specific point from the job description. If it doesn't, cut it.
 - Read it out loud. If it sounds like a robot wrote it, rewrite it.
 
 FABRICATION = INSTANT REJECTION:
 The candidate's real tools are ONLY: {skills_str}.
 Do NOT mention ANY tool not in this list. If the job asks for tools not listed, talk about the work you did, not the tools.
+Every claim about the candidate must be traceable to a sentence in the resume: no invented projects, clients, team sizes, outcomes, numbers, certifications or motivations. Say nothing about the company beyond what the job description states. Do not claim the candidate has used, led or delivered anything the resume does not say.
 
-Sign off: just "{sign_off_name}"
+Sign off with the full name: "{full_name}"
 
 Output ONLY the letter text. No subject lines. No "Here is the cover letter:" preamble. No notes after the sign-off.
-Start DIRECTLY with "Dear Hiring Manager," and end with the name."""
+Start DIRECTLY with "{salutation}" and end with "{full_name}"."""
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────
 
-def _strip_preamble(text: str) -> str:
-    """Remove LLM preamble before 'Dear Hiring Manager,' if present.
+def _strip_preamble(text: str, lang: str = DEFAULT_LANG) -> str:
+    """Remove LLM preamble before the salutation if present.
 
     Gemini and other models sometimes output "Here is the cover letter:" or
     similar meta-commentary before the actual letter text. Strip everything
-    before the first occurrence of "Dear" so the validator's start-check passes.
+    before the first salutation for the letter's language so the validator's
+    start-check passes.
     """
-    dear_idx = text.lower().find("dear")
-    if dear_idx > 0:
-        return text[dear_idx:]
+    lowered = text.lower()
+    prefixes = SALUTATION_PREFIXES.get(lang, SALUTATION_PREFIXES["en"])
+    positions = [lowered.find(p) for p in prefixes]
+    positions = [i for i in positions if i >= 0]
+    if positions and min(positions) > 0:
+        return text[min(positions):]
     return text
 
 
@@ -120,6 +149,7 @@ def _strip_preamble(text: str) -> str:
 def generate_cover_letter(
     resume_text: str, job: dict, profile: dict,
     max_retries: int = 3, validation_mode: str = "normal",
+    lang: str = DEFAULT_LANG,
 ) -> str:
     """Generate a cover letter with fresh context on each retry + auto-sanitize.
 
@@ -146,7 +176,9 @@ def generate_cover_letter(
     avoid_notes: list[str] = []
     letter = ""
     client = get_client()
-    cl_prompt_base = _build_cover_letter_prompt(profile)
+    location = resolve_candidate_location(profile, job, lang)
+    resume_text = localize_resume_header(resume_text, location["label"])
+    cl_prompt_base = _build_cover_letter_prompt(profile, lang, location)
 
     for attempt in range(max_retries + 1):
         # Fresh conversation every attempt
@@ -167,9 +199,19 @@ def generate_cover_letter(
 
         letter = client.chat(messages, max_tokens=1024, temperature=0.7)
         letter = sanitize_text(letter)  # auto-fix em dashes, smart quotes
-        letter = _strip_preamble(letter)  # remove any "Here is the letter:" prefix
+        letter = _strip_preamble(letter, lang)  # remove any "Here is the letter:" prefix
 
-        validation = validate_cover_letter(letter, mode=validation_mode)
+        validation = validate_cover_letter(letter, mode=validation_mode, lang=lang)
+        if validation["passed"] and validation_mode != "lenient":
+            # Programmatic fabrication check: numbers must come from the resume or the posting
+            new_nums = find_new_numbers(letter, resume_text + "\n" + job_text)
+            if new_nums:
+                validation = {
+                    "passed": False,
+                    "errors": ["Numbers not in the resume or job posting: " + ", ".join(new_nums[:8])
+                               + ". Use only numbers that appear in the resume."],
+                    "warnings": [],
+                }
         if validation["passed"]:
             return letter
 
@@ -180,6 +222,9 @@ def generate_cover_letter(
             attempt + 1, max_retries + 1, validation["errors"],
         )
 
+    if validation_mode == "strict":
+        log.warning("Cover letter rejected after %d attempts: %s", max_retries + 1, avoid_notes[-2:])
+        return ""  # strict mode: no letter is better than an unverified one
     return letter  # last attempt even if failed
 
 
@@ -198,7 +243,7 @@ def run_cover_letters(min_score: int = 7, limit: int = 20,
         {"generated": int, "errors": int, "elapsed": float}
     """
     profile = load_profile()
-    resume_text = RESUME_PATH.read_text(encoding="utf-8")
+    resume_cache: dict[str, str] = {}  # base resume text per language (en / fr / it)
     conn = get_connection()
 
     # Fetch jobs that have tailored resumes but no cover letter yet
@@ -234,8 +279,13 @@ def run_cover_letters(min_score: int = 7, limit: int = 20,
     for job in jobs:
         completed += 1
         try:
-            letter = generate_cover_letter(resume_text, job, profile,
-                                          validation_mode=validation_mode)
+            lang = detect_job_language(job)
+            if lang not in resume_cache:
+                resume_cache[lang] = load_resume_text(lang)
+            letter = generate_cover_letter(resume_cache[lang], job, profile,
+                                          validation_mode=validation_mode, lang=lang)
+            if not letter.strip():
+                raise ValueError("cover letter failed validation after all retries")
 
             # Build safe filename prefix
             safe_title = re.sub(r"[^\w\s-]", "", job["title"])[:50].strip().replace(" ", "_")
@@ -249,7 +299,7 @@ def run_cover_letters(min_score: int = 7, limit: int = 20,
             pdf_path = None
             try:
                 from applypilot.scoring.pdf import convert_to_pdf
-                pdf_path = str(convert_to_pdf(cl_path))
+                pdf_path = str(convert_to_pdf(cl_path, lang=lang))
             except Exception:
                 log.debug("PDF generation failed for %s", cl_path, exc_info=True)
 
@@ -265,8 +315,8 @@ def run_cover_letters(min_score: int = 7, limit: int = 20,
             elapsed = time.time() - t0
             rate = completed / elapsed if elapsed > 0 else 0
             log.info(
-                "%d/%d [OK] | %.1f jobs/min | %s",
-                completed, len(jobs), rate * 60, result["title"][:40],
+                "%d/%d [OK] lang=%s | %.1f jobs/min | %s",
+                completed, len(jobs), lang, rate * 60, result["title"][:40],
             )
         except Exception as e:
             result = {

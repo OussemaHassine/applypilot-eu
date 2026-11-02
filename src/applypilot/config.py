@@ -14,7 +14,7 @@ PROFILE_PATH = APP_DIR / "profile.json"
 RESUME_PATH = APP_DIR / "resume.txt"
 RESUME_PDF_PATH = APP_DIR / "resume.pdf"
 SEARCH_CONFIG_PATH = APP_DIR / "searches.yaml"
-ENV_PATH = APP_DIR / ".env"
+ENV_PATH = APP_DIR / "api_keys.env"
 
 # Generated output
 TAILORED_DIR = APP_DIR / "tailored_resumes"
@@ -171,6 +171,24 @@ DEFAULTS = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Multi-language base resumes (local patch)
+# ---------------------------------------------------------------------------
+
+RESUME_LANGUAGES = ("en", "fr", "it")
+
+
+def get_resume_path(lang: str = "en") -> Path:
+    """Base resume for a language: ~/.applypilot/resume_<lang>.txt, else resume.txt."""
+    candidate = APP_DIR / f"resume_{lang}.txt"
+    return candidate if candidate.exists() else RESUME_PATH
+
+
+def load_resume_text(lang: str = "en") -> str:
+    """Read the base resume text for a language (falls back to resume.txt)."""
+    return get_resume_path(lang).read_text(encoding="utf-8")
+
+
 def load_env():
     """Load environment variables from ~/.applypilot/.env if it exists."""
     from dotenv import load_dotenv
@@ -239,7 +257,7 @@ def check_tier(required: int, feature: str) -> None:
 
     missing: list[str] = []
     if required >= 2 and not any(os.environ.get(k) for k in ("GEMINI_API_KEY", "OPENAI_API_KEY", "LLM_URL")):
-        missing.append("LLM API key — run [bold]applypilot init[/bold] or set GEMINI_API_KEY")
+        missing.append(f"LLM API key — set GEMINI_API_KEY in {ENV_PATH} (or run [bold]applypilot init[/bold])")
     if required >= 3:
         if not shutil.which("claude"):
             missing.append("Claude Code CLI — install from [bold]https://claude.ai/code[/bold]")

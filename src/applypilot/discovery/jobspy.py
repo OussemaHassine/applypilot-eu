@@ -92,27 +92,8 @@ def _location_ok(location: str | None, accept: list[str], reject: list[str]) -> 
     Remote jobs are always accepted. Non-remote jobs must match an accept
     pattern and not match a reject pattern.
     """
-    if not location:
-        return True  # unknown location -- keep it, let scorer decide
-
-    loc = location.lower()
-
-    # Remote jobs always OK
-    if any(r in loc for r in ("remote", "anywhere", "work from home", "wfh", "distributed")):
-        return True
-
-    # Reject non-remote matches
-    for r in reject:
-        if r.lower() in loc:
-            return False
-
-    # Accept matches
-    for a in accept:
-        if a.lower() in loc:
-            return True
-
-    # No match -- reject unknown
-    return False
+    from applypilot.discovery.locfilter import location_ok
+    return location_ok(location, accept, reject)
 
 
 # -- DB storage (JobSpy DataFrame -> SQLite) ---------------------------------
@@ -164,7 +145,10 @@ def store_jobspy_results(conn: sqlite3.Connection, df, source_label: str) -> tup
             detail_scraped_at = now
 
         # Extract apply URL if JobSpy provided it
-        apply_url = str(row.get("job_url_direct", "")) if str(row.get("job_url_direct", "")) != "nan" else None
+        raw_direct = row.get("job_url_direct")
+        apply_url = str(raw_direct).strip() if raw_direct is not None else ""
+        if apply_url.lower() in ("", "nan", "none", "null") or not apply_url.startswith("http"):
+            apply_url = None  # never store the string "None"
 
         try:
             conn.execute(
@@ -218,7 +202,7 @@ def _run_one_search(
             "results_wanted": results_per_site,
             "hours_old": hours_old,
             "description_format": "markdown",
-            "country_indeed": defaults.get("country_indeed", "usa"),
+            "country_indeed": s.get("country_indeed") or defaults.get("country_indeed", "usa"),
             "verbose": 0,
         }
         if s.get("remote"):
@@ -391,6 +375,7 @@ def _full_crawl(
                 "location": loc["location"],
                 "remote": loc.get("remote", False),
                 "tier": q.get("tier", 0),
+                "country_indeed": loc.get("country_indeed"),
             })
 
     proxy_config = parse_proxy(proxy) if proxy else None

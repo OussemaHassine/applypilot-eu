@@ -16,13 +16,18 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from applypilot.config import RESUME_PATH, TAILORED_DIR, load_profile
+from applypilot.config import TAILORED_DIR, load_profile, load_resume_text
+from applypilot.location import localize_resume_header, resolve_candidate_location
 from applypilot.database import get_connection, get_jobs_by_stage
+from applypilot.lang import DEFAULT_LANG, LANG_NAMES, detect_job_language
 from applypilot.llm import get_client
 from applypilot.scoring.validator import (
     BANNED_WORDS,
     FABRICATION_WATCHLIST,
     sanitize_text,
+    _build_skills_set,
+    find_new_numbers,
+    find_unknown_skills,
     validate_json_fields,
     validate_tailored_resume,
 )
@@ -34,7 +39,7 @@ MAX_ATTEMPTS = 5  # max cross-run retries before giving up
 
 # ── Prompt Builders (profile-driven) ──────────────────────────────────────
 
-def _build_tailor_prompt(profile: dict) -> str:
+def _build_tailor_prompt(profile: dict, lang: str = DEFAULT_LANG, location: dict | None = None) -> str:
     """Build the resume tailoring system prompt from the user's profile.
 
     All skills boundaries, preserved entities, and formatting rules are
@@ -67,11 +72,27 @@ def _build_tailor_prompt(profile: dict) -> str:
 
     education = profile.get("experience", {})
     education_level = education.get("education_level", "")
+    lang_name = LANG_NAMES.get(lang, "English")
+    location_block = ""
+    if location:
+        from applypilot.location import spoken_languages_for
+        langs = spoken_languages_for(location, lang)
+        arabic_rule = "" if location.get("mention_arabic") else " Do NOT list or mention Arabic anywhere."
+        location_block = (
+            f"\n## LOCATION:\nThe candidate is currently based in {location['label']} and is open to relocation "
+            f"anywhere in Europe and to remote roles. If the summary mentions where the candidate is based, "
+            f"use exactly this place; never any other city.\n"
+            f"\n## SPOKEN LANGUAGES:\nThe languages line must list exactly: {langs}.{arabic_rule}\n"
+        )
 
     return f"""You are a senior technical recruiter rewriting a resume to get this person an interview.
 
 Take the base resume and job description. Return a tailored resume as a JSON object.
 
+## LANGUAGE:
+Write every free-text value (title, summary, skill category names, headers, subtitles, bullets, education) in {lang_name}, the language of the base resume and the job posting. JSON keys stay exactly as given, in English. Never translate company names, product names, tool names or school names: copy them exactly as they appear in the base resume.
+
+{location_block}
 ## RECRUITER SCAN (6 seconds):
 1. Title -- matches what they're hiring?
 2. Summary -- 2 sentences proving you've done this work
@@ -81,21 +102,21 @@ Take the base resume and job description. Return a tailored resume as a JSON obj
 ## SKILLS BOUNDARY (real skills only):
 {skills_block}
 
-You MAY add 2-3 closely related tools (Kubernetes if Docker, Terraform if AWS, Redis if PostgreSQL). No unrelated languages/frameworks.
+Use ONLY skills, tools and languages that appear in the base resume or the list above. Do NOT add anything else, not even "closely related" tools. If the job asks for something the candidate does not have, leave it out. Reordering and dropping is allowed; adding is not.
 
 ## TAILORING RULES:
 
-TITLE: Match the target role. Keep seniority (Senior/Lead/Staff). Drop company suffixes and team names.
+TITLE: Match the target role's wording (e.g. "QA Automation Engineer", "SDET") but never add a seniority level (Senior, Lead, Staff, Principal) that the base resume does not have. Drop company suffixes and team names.
 
-SUMMARY: Rewrite from scratch. Lead with the 1-2 skills that matter most for THIS role. Sound like someone who's done this job.
+SUMMARY: Rewrite from scratch. Lead with the 1-2 skills that matter most for THIS role. Sound like someone who's done this job. Every claim must be backed by a bullet in the base resume.
 
-SKILLS: Reorder each category so the job's must-haves appear first.
+SKILLS: Keep the base resume's own categories and items. Reorder each category so the job's must-haves appear first. Do not add items.
 
 Reframe EVERY bullet for this role. Same real work, different angle. Every bullet must be reworded. Never copy verbatim.
 
-PROJECTS: Reorder by relevance. Drop irrelevant projects entirely.
+PROJECTS: Include EVERY project listed in the base resume's PROJECTS section, reworded for this job with the same facts, most relevant first. Never drop a project. Never move an experience item (a job or internship) into PROJECTS: each piece of work appears only once in the resume.
 
-BULLETS: Strong verb + what you built + quantified impact. Vary verbs (Built, Designed, Implemented, Reduced, Automated, Deployed, Operated, Optimized). Most relevant first. Max 4 per section.
+BULLETS: Strong verb + what was built + the real outcome stated in the base resume. Use a number ONLY if that exact number appears in the base resume; never add percentages, counts, time savings, team sizes or user numbers. Vary verbs (Built, Designed, Implemented, Reduced, Automated, Deployed, Operated, Optimized). Most relevant first. Max 4 per section.
 
 ## VOICE:
 - Write like a real engineer. Short, direct.
@@ -107,18 +128,23 @@ BULLETS: Strong verb + what you built + quantified impact. Vary verbs (Built, De
 
 ## HARD RULES:
 - Do NOT invent work, companies, degrees, or certifications
+- Do NOT add skills, tools, certifications, numbers, clients, team sizes or responsibilities that are not in the base resume
+- Job titles, company names and dates inside EXPERIENCE and EDUCATION stay exactly as in the base resume; only the top TITLE line may change
+- Certifications: copy the base resume wording exactly ("in progress" stays "in progress")
 - Do NOT change real numbers ({metrics_str})
 - Preserved companies: {companies_str} -- names stay as-is
-- Preserved school: {school}
+- Preserved school: {school} (must appear in education)
+- Highest education: {education_level}
 - Must fit 1 page.
 
 ## OUTPUT: Return ONLY valid JSON. No markdown fences. No commentary. No "here is" preamble.
 
-{{"title":"Role Title","summary":"2-3 tailored sentences.","skills":{{"Languages":"...","Frameworks":"...","DevOps & Infra":"...","Databases":"...","Tools":"..."}},"experience":[{{"header":"Title at Company","subtitle":"Tech | Dates","bullets":["bullet 1","bullet 2","bullet 3","bullet 4"]}}],"projects":[{{"header":"Project Name - Description","subtitle":"Tech | Dates","bullets":["bullet 1","bullet 2"]}}],"education":"{school} | {education_level}"}}"""
+{{"title":"Role Title","summary":"2-3 tailored sentences.","skills":{{"<category name exactly as in the base resume SKILLS section>":"comma-separated items from that category of the base resume, most relevant first"}},"experience":[{{"header":"Exact job title from the base resume at Company","subtitle":"Tech | Dates","bullets":["bullet 1","bullet 2","bullet 3","bullet 4"]}}],"projects":[{{"header":"Project Name - Description","subtitle":"Tech | Dates","bullets":["bullet 1","bullet 2"]}}],"education":"Degree, School, City, Dates (one line per degree, newest first, separated by newlines; school names copied exactly from the base resume; must include {school})"}}"""
 
 
-def _build_judge_prompt(profile: dict) -> str:
+def _build_judge_prompt(profile: dict, lang: str = DEFAULT_LANG) -> str:
     """Build the LLM judge prompt from the user's profile."""
+    lang_name = LANG_NAMES.get(lang, "English")
     boundary = profile.get("skills_boundary", {})
     resume_facts = profile.get("resume_facts", {})
 
@@ -162,15 +188,16 @@ ISSUES: (list any problems, or "none")
 - Dropping bullets entirely
 - Reordering anything
 - Changing the title or summary completely
+- The tailored resume being written in {lang_name} (translating real content is not fabrication)
 
-## TOLERANCE RULE:
-The goal is to get interviews, not to be a perfect fact-checker. Allow up to 3 minor stretches per resume:
-- Adding a closely related tool the candidate could realistically know is a MINOR STRETCH, not fabrication.
-- Reframing a metric with slightly different wording is a MINOR STRETCH.
-- Adding any LEARNABLE skill given their existing stack is a MINOR STRETCH.
-- Only FAIL if there are MAJOR lies: completely invented projects, fake companies, fake degrees, wildly inflated numbers, or skills from a completely different domain.
+## ZERO TOLERANCE FOR NEW FACTS:
+- Any tool, language, framework, platform or certification that is not in the ORIGINAL resume is fabrication, even if "closely related" or "learnable". FAIL.
+- Any number (percentage, count, duration, team size, user count) that is not in the ORIGINAL resume is fabrication. FAIL.
+- A changed job title, company, school or date inside EXPERIENCE or EDUCATION is fabrication. FAIL. (Only the top title line may change.)
+- An added seniority level (Senior, Lead, Staff, Principal) is fabrication. FAIL.
+- A certification marked "in progress" presented as obtained is fabrication. FAIL.
 
-Be strict about major lies. Be lenient about minor stretches and learnable skills. Do not fail for style, tone, or restructuring."""
+Be strict about facts. Do not fail for style, tone, translation, reordering or restructuring."""
 
 
 # ── JSON Extraction ───────────────────────────────────────────────────────
@@ -220,7 +247,7 @@ def extract_json(raw: str) -> dict:
 
 # ── Resume Assembly (profile-driven header) ──────────────────────────────
 
-def assemble_resume_text(data: dict, profile: dict) -> str:
+def assemble_resume_text(data: dict, profile: dict, location_label: str | None = None) -> str:
     """Convert JSON resume data to formatted plain text.
 
     Header (name, location, contact) is ALWAYS code-injected from the profile,
@@ -240,9 +267,9 @@ def assemble_resume_text(data: dict, profile: dict) -> str:
     lines.append(personal.get("full_name", ""))
     lines.append(sanitize_text(data.get("title", "Software Engineer")))
 
-    # Location from search config or profile -- leave blank if not available
-    # The location line is optional; the original used a hardcoded city.
-    # We omit it here; the LLM prompt can include it if the user sets it.
+    # Location line: per-job (personal.location_by_country)
+    if location_label:
+        lines.append(location_label)
 
     # Contact line
     contact_parts: list[str] = []
@@ -280,9 +307,11 @@ def assemble_resume_text(data: dict, profile: dict) -> str:
             lines.append(f"- {sanitize_text(b)}")
         lines.append("")
 
-    # Projects
-    lines.append("PROJECTS")
-    for entry in data.get("projects", []):
+    # Projects (section omitted entirely when the LLM kept none)
+    projects = data.get("projects") or []
+    if projects:
+        lines.append("PROJECTS")
+    for entry in projects:
         lines.append(sanitize_text(entry.get("header", "")))
         if entry.get("subtitle"):
             lines.append(sanitize_text(entry["subtitle"]))
@@ -300,7 +329,8 @@ def assemble_resume_text(data: dict, profile: dict) -> str:
 # ── LLM Judge ────────────────────────────────────────────────────────────
 
 def judge_tailored_resume(
-    original_text: str, tailored_text: str, job_title: str, profile: dict
+    original_text: str, tailored_text: str, job_title: str, profile: dict,
+    lang: str = DEFAULT_LANG,
 ) -> dict:
     """LLM judge layer: catches subtle fabrication that programmatic checks miss.
 
@@ -313,7 +343,7 @@ def judge_tailored_resume(
     Returns:
         {"passed": bool, "verdict": str, "issues": str, "raw": str}
     """
-    judge_prompt = _build_judge_prompt(profile)
+    judge_prompt = _build_judge_prompt(profile, lang)
 
     messages = [
         {"role": "system", "content": judge_prompt},
@@ -344,9 +374,28 @@ def judge_tailored_resume(
 
 # ── Core Tailoring ───────────────────────────────────────────────────────
 
+_PROJECT_HEADERS = ("PROJECTS", "PROJETS", "PROGETTI", "PROJETS PERSONNELS", "PROGETTI PERSONALI")
+
+
+def count_base_projects(resume_text: str) -> int:
+    """Number of project entries (non-bullet lines) in the base resume's projects section."""
+    count, inside = 0, False
+    for line in resume_text.splitlines():
+        s = line.strip()
+        if s.upper() in _PROJECT_HEADERS:
+            inside = True
+            continue
+        if inside and s and s == s.upper() and re.search(r"[A-ZÀ-Ý]{3}", s) and not s.startswith("-"):
+            break  # next section header
+        if inside and s and not s.startswith(("-", "\u2022")):
+            count += 1
+    return count
+
+
 def tailor_resume(
     resume_text: str, job: dict, profile: dict,
     max_retries: int = 3, validation_mode: str = "normal",
+    lang: str = DEFAULT_LANG,
 ) -> tuple[str, dict]:
     """Generate a tailored resume via JSON output + fresh context on each retry.
 
@@ -379,11 +428,14 @@ def tailor_resume(
     report: dict = {
         "attempts": 0, "validator": None, "judge": None,
         "status": "pending", "validation_mode": validation_mode,
+        "language": lang,
     }
     avoid_notes: list[str] = []
     tailored = ""
     client = get_client()
-    tailor_prompt_base = _build_tailor_prompt(profile)
+    location = resolve_candidate_location(profile, job, lang)
+    resume_text = localize_resume_header(resume_text, location["label"])
+    tailor_prompt_base = _build_tailor_prompt(profile, lang, location)
 
     for attempt in range(max_retries + 1):
         report["attempts"] = attempt + 1
@@ -419,12 +471,42 @@ def tailor_resume(
             if attempt < max_retries:
                 continue
             # Last attempt — assemble whatever we got
-            tailored = assemble_resume_text(data, profile)
+            tailored = assemble_resume_text(data, profile, location["label"])
             report["status"] = "failed_validation"
             return tailored, report
 
         # Assemble text (header injected by code, em dashes auto-fixed)
-        tailored = assemble_resume_text(data, profile)
+        tailored = assemble_resume_text(data, profile, location["label"])
+
+        # Layer 1b: programmatic fabrication checks against the base resume
+        fab_errors: list[str] = []
+        expected_projects = count_base_projects(resume_text)
+        got_projects = len(data.get("projects") or [])
+        if expected_projects and got_projects < expected_projects:
+            fab_errors.append(
+                f"Only {got_projects} of the {expected_projects} projects from the base resume were included. "
+                "Include every base-resume project, most relevant first."
+            )
+        if validation_mode != "lenient":
+            new_nums = find_new_numbers(tailored, resume_text)
+            if new_nums:
+                fab_errors.append(
+                    "Numbers not in the base resume: " + ", ".join(new_nums[:8])
+                    + ". Use only numbers that appear in the base resume."
+                )
+            unknown = find_unknown_skills(data.get("skills"), _build_skills_set(profile), resume_text)
+            if unknown:
+                fab_errors.append(
+                    "Skills not in the base resume: " + ", ".join(unknown[:8]) + ". Remove them."
+                )
+        if fab_errors:
+            report["validator"]["errors"].extend(fab_errors)
+            report["validator"]["passed"] = False
+            avoid_notes.extend(fab_errors)
+            if attempt < max_retries:
+                continue
+            report["status"] = "failed_validation"
+            return tailored, report
 
         # Layer 2: LLM judge (catches subtle fabrication) — skipped in lenient mode
         if validation_mode == "lenient":
@@ -432,7 +514,7 @@ def tailor_resume(
             report["status"] = "approved"
             return tailored, report
 
-        judge = judge_tailored_resume(resume_text, tailored, job.get("title", ""), profile)
+        judge = judge_tailored_resume(resume_text, tailored, job.get("title", ""), profile, lang=lang)
         report["judge"] = judge
 
         if not judge["passed"]:
@@ -468,7 +550,7 @@ def run_tailoring(min_score: int = 7, limit: int = 20,
         {"approved": int, "failed": int, "errors": int, "elapsed": float}
     """
     profile = load_profile()
-    resume_text = RESUME_PATH.read_text(encoding="utf-8")
+    resume_cache: dict[str, str] = {}  # base resume text per language (en / fr / it)
     conn = get_connection()
 
     jobs = get_jobs_by_stage(conn=conn, stage="pending_tailor", min_score=min_score, limit=limit)
@@ -487,8 +569,11 @@ def run_tailoring(min_score: int = 7, limit: int = 20,
     for job in jobs:
         completed += 1
         try:
-            tailored, report = tailor_resume(resume_text, job, profile,
-                                             validation_mode=validation_mode)
+            lang = detect_job_language(job)
+            if lang not in resume_cache:
+                resume_cache[lang] = load_resume_text(lang)
+            tailored, report = tailor_resume(resume_cache[lang], job, profile,
+                                             validation_mode=validation_mode, lang=lang)
 
             # Build safe filename prefix
             safe_title = re.sub(r"[^\w\s-]", "", job["title"])[:50].strip().replace(" ", "_")
@@ -518,10 +603,13 @@ def run_tailoring(min_score: int = 7, limit: int = 20,
             # Generate PDF for approved resumes (best-effort)
             # "approved_with_judge_warning" is also a success — resume was generated.
             pdf_path = None
-            if report["status"] in ("approved", "approved_with_judge_warning"):
+            accepted = report["status"] == "approved" or (
+                report["status"] == "approved_with_judge_warning" and validation_mode != "strict"
+            )
+            if accepted:
                 try:
                     from applypilot.scoring.pdf import convert_to_pdf
-                    pdf_path = str(convert_to_pdf(txt_path))
+                    pdf_path = str(convert_to_pdf(txt_path, lang=lang))
                 except Exception:
                     log.debug("PDF generation failed for %s", txt_path, exc_info=True)
 
@@ -533,6 +621,7 @@ def run_tailoring(min_score: int = 7, limit: int = 20,
                 "site": job["site"],
                 "status": report["status"],
                 "attempts": report["attempts"],
+                "language": lang,
             }
         except Exception as e:
             result = {
@@ -547,9 +636,10 @@ def run_tailoring(min_score: int = 7, limit: int = 20,
         elapsed = time.time() - t0
         rate = completed / elapsed if elapsed > 0 else 0
         log.info(
-            "%d/%d [%s] attempts=%s | %.1f jobs/min | %s",
+            "%d/%d [%s] lang=%s attempts=%s | %.1f jobs/min | %s",
             completed, len(jobs),
             result["status"].upper(),
+            result.get("language", "?"),
             result.get("attempts", "?"),
             rate * 60,
             result["title"][:40],
@@ -557,7 +647,7 @@ def run_tailoring(min_score: int = 7, limit: int = 20,
 
     # Persist to DB: increment attempt counter for ALL, save path only for approved
     now = datetime.now(timezone.utc).isoformat()
-    _success_statuses = {"approved", "approved_with_judge_warning"}
+    _success_statuses = {"approved"} if validation_mode == "strict" else {"approved", "approved_with_judge_warning"}
     for r in results:
         if r["status"] in _success_statuses:
             conn.execute(

@@ -39,3 +39,9 @@ Thumbs.db
 
 # Claude Code
 .claude/
+
+# Example configs are safe to commit
+!examples/*.env
+# Local scratch
+.nightly*
+*.tex.log

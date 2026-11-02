@@ -63,24 +63,36 @@ if platform.system() != "Windows":
 # MCP config
 # ---------------------------------------------------------------------------
 
+GMAIL_KEYS_PATH = Path.home() / ".gmail-mcp" / "gcp-oauth.keys.json"
+
+
+def gmail_available() -> bool:
+    """True when the Gmail MCP server has OAuth keys to work with."""
+    return GMAIL_KEYS_PATH.exists()
+
+
 def _make_mcp_config(cdp_port: int) -> dict:
-    """Build MCP config dict for a specific CDP port."""
-    return {
-        "mcpServers": {
-            "playwright": {
-                "command": "npx",
-                "args": [
-                    "@playwright/mcp@latest",
-                    f"--cdp-endpoint=http://localhost:{cdp_port}",
-                    f"--viewport-size={config.DEFAULTS['viewport']}",
-                ],
-            },
-            "gmail": {
-                "command": "npx",
-                "args": ["-y", "@gongrzhe/server-gmail-autoauth-mcp"],
-            },
-        }
+    """Build MCP config dict for a specific CDP port.
+
+    The Gmail server is only included when its OAuth keys exist; otherwise it
+    would fail to start on every run.
+    """
+    servers: dict = {
+        "playwright": {
+            "command": "npx",
+            "args": [
+                "@playwright/mcp@latest",
+                f"--cdp-endpoint=http://localhost:{cdp_port}",
+                f"--viewport-size={config.DEFAULTS['viewport']}",
+            ],
+        },
     }
+    if gmail_available():
+        servers["gmail"] = {
+            "command": "npx",
+            "args": ["-y", "@gongrzhe/server-gmail-autoauth-mcp"],
+        }
+    return {"mcpServers": servers}
 
 
 # ---------------------------------------------------------------------------
@@ -137,6 +149,13 @@ def acquire_job(target_url: str | None = None, min_score: int = 7,
                   AND fit_score >= ?
                   {site_clause}
                   {url_clauses}
+                  -- never work two postings with the same title at once: the second one
+                  -- must see the first as applied so the duplicate check can catch it
+                  AND NOT EXISTS (
+                      SELECT 1 FROM jobs j2
+                      WHERE j2.apply_status = 'in_progress'
+                        AND lower(trim(j2.title)) = lower(trim(jobs.title))
+                  )
                 ORDER BY fit_score DESC, url
                 LIMIT 1
             """, [config.DEFAULTS["max_apply_attempts"]] + params).fetchone()
@@ -147,7 +166,7 @@ def acquire_job(target_url: str | None = None, min_score: int = 7,
 
         # Skip manual ATS sites (unsolvable CAPTCHAs)
         from applypilot.config import is_manual_ats
-        apply_url = row["application_url"] or row["url"]
+        apply_url = prompt_mod._apply_url(dict(row))
         if is_manual_ats(apply_url):
             conn.execute(
                 "UPDATE jobs SET apply_status = 'manual', apply_error = 'manual ATS' WHERE url = ?",
@@ -310,11 +329,16 @@ def run_job(job: dict, port: int, worker_id: int = 0,
     if txt_path and txt_path.exists():
         resume_text = txt_path.read_text(encoding="utf-8")
 
+    # Fresh working directory first: Playwright MCP only uploads files from the
+    # agent's cwd, so the resume/cover letter PDFs are staged inside it.
+    worker_dir = reset_worker_dir(worker_id)
+
     # Build the prompt
     agent_prompt = prompt_mod.build_prompt(
         job=job,
         tailored_resume=resume_text,
         dry_run=dry_run,
+        dest_dir=worker_dir,
     )
 
     # Write per-worker MCP config
@@ -347,8 +371,6 @@ def run_job(job: dict, port: int, worker_id: int = 0,
     env.pop("CLAUDECODE", None)
     env.pop("CLAUDE_CODE_ENTRYPOINT", None)
 
-    worker_dir = reset_worker_dir(worker_id)
-
     update_state(worker_id, status="applying", job_title=job["title"],
                  company=job.get("site", ""), score=job.get("fit_score", 0),
                  start_time=time.time(), actions=0, last_action="starting")
@@ -359,7 +381,7 @@ def run_job(job: dict, port: int, worker_id: int = 0,
     log_header = (
         f"\n{'=' * 60}\n"
         f"[{ts_header}] {job['title']} @ {job.get('site', '')}\n"
-        f"URL: {job.get('application_url') or job['url']}\n"
+        f"URL: {prompt_mod._apply_url(job)}\n"
         f"Score: {job.get('fit_score', 'N/A')}/10\n"
         f"{'=' * 60}\n"
     )
@@ -457,6 +479,13 @@ def run_job(job: dict, port: int, worker_id: int = 0,
         job_log.write_text(output, encoding="utf-8")
 
         if stats:
+            try:  # persist Claude usage per application (logs/apply_usage.jsonl)
+                with open(config.LOG_DIR / "apply_usage.jsonl", "a", encoding="utf-8") as fh:
+                    fh.write(json.dumps({"ts": datetime.now().isoformat(timespec="seconds"),
+                                         "job": job.get("title", "")[:80], "model": model,
+                                         "seconds": elapsed, **stats}) + "\n")
+            except Exception:
+                pass
             cost = stats.get("cost_usd", 0)
             ws = get_state(worker_id)
             prev_cost = ws.total_cost if ws else 0.0
@@ -493,6 +522,14 @@ def run_job(job: dict, port: int, worker_id: int = 0,
                     return f"failed:{reason}", duration_ms
             return "failed:unknown", duration_ms
 
+        # Claude CLI refused to run (usage limit, rate limit, overload, auth): this is not
+        # the job's fault. Pause the worker instead of burning the job's attempts.
+        low = output.lower()
+        if any(p in low for p in _CLI_PAUSE_MARKERS):
+            add_event(f"[W{worker_id}] CLI UNAVAILABLE (usage/rate limit) -- pausing")
+            update_state(worker_id, status="paused", last_action="claude limit, pausing")
+            return "paused:usage_limit", duration_ms
+
         add_event(f"[W{worker_id}] NO RESULT ({elapsed}s)")
         update_state(worker_id, status="failed", last_action=f"no result ({elapsed}s)")
         return "failed:no_result_line", duration_ms
@@ -528,7 +565,15 @@ PERMANENT_FAILURES: set[str] = {
     "site_blocked", "cloudflare_blocked", "blocked_by_cloudflare",
 }
 
-PERMANENT_PREFIXES: tuple[str, ...] = ("site_blocked", "cloudflare", "blocked_by")
+# Output fragments that mean the Claude CLI itself could not work (not a job failure)
+_CLI_PAUSE_MARKERS: tuple[str, ...] = (
+    "hit your 5-hour limit", "usage limit", "rate limit", "limit · resets", "limit - resets",
+    "resets at", "overloaded", "credit balance", "please try again later", "not logged in",
+    "invalid api key", "authentication_error", "429",
+)
+PAUSE_ON_CLI_LIMIT_SECONDS = 900
+
+PERMANENT_PREFIXES: tuple[str, ...] = ("site_blocked", "cloudflare", "blocked_by", "email_only_application", "no_job_url", "not_a_job_application", "unsafe_", "duplicate_application")
 
 
 def _is_permanent_failure(result: str) -> bool:
@@ -608,8 +653,20 @@ def worker_loop(worker_id: int = 0, limit: int = 1,
                 release_lock(job["url"])
                 add_event(f"[W{worker_id}] Skipped: {job['title'][:30]}")
                 continue
+            elif result.startswith("paused:"):
+                # Job goes back to the queue untouched; wait for the limit window to pass.
+                release_lock(job["url"])
+                add_event(f"[W{worker_id}] Paused {PAUSE_ON_CLI_LIMIT_SECONDS // 60} min (Claude unavailable)")
+                if _stop_event.wait(timeout=PAUSE_ON_CLI_LIMIT_SECONDS):
+                    break
+                continue
             elif result == "applied":
-                mark_result(job["url"], "applied", duration_ms=duration_ms)
+                if dry_run:
+                    # Nothing was submitted: leave the job in the queue for a real run.
+                    release_lock(job["url"])
+                    add_event(f"[W{worker_id}] DRY RUN OK, not submitted: {job['title'][:30]}")
+                else:
+                    mark_result(job["url"], "applied", duration_ms=duration_ms)
                 applied += 1
                 update_state(worker_id, jobs_applied=applied,
                              jobs_done=applied + failed)

@@ -16,6 +16,8 @@ import time
 import httpx
 
 log = logging.getLogger(__name__)
+# httpx logs every request at INFO, which bloats run logs to tens of MB.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 # ---------------------------------------------------------------------------
 # Provider detection
@@ -92,6 +94,9 @@ class LLMClient:
         # True once we've confirmed the native Gemini API works for this model
         self._use_native_gemini: bool = False
         self._is_gemini: bool = base_url.startswith(_GEMINI_COMPAT_BASE)
+        self._is_openai: bool = base_url.startswith("https://api.openai.com")
+        # Set once a model rejects the temperature parameter (OpenAI reasoning models).
+        self._no_temperature: bool = False
 
     # -- Native Gemini API --------------------------------------------------
 
@@ -157,18 +162,31 @@ class LLMClient:
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
 
-        payload = {
-            "model": self.model,
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-        }
+        payload: dict = {"model": self.model, "messages": messages}
+        if not self._no_temperature:
+            payload["temperature"] = temperature
+        if self._is_openai:
+            # Newer OpenAI models reject max_tokens; the budget also covers reasoning tokens.
+            payload["max_completion_tokens"] = max(max_tokens, 8192)
+        else:
+            payload["max_tokens"] = max_tokens
 
         resp = self._client.post(
             f"{self.base_url}/chat/completions",
             json=payload,
             headers=headers,
         )
+
+        if (
+            resp.status_code == 400
+            and self._is_openai
+            and not self._no_temperature
+            and "temperature" in resp.text
+            and "unsupported" in resp.text.lower()
+        ):
+            log.info("Model '%s' rejects the temperature parameter; retrying without it.", self.model)
+            self._no_temperature = True
+            return self._chat_compat(messages, temperature, max_tokens)
 
         # 403 on Gemini compat = model not available on compat layer.
         # Raise a specific sentinel so chat() can switch to native API.
@@ -181,7 +199,8 @@ class LLMClient:
     def _handle_compat_response(resp: httpx.Response) -> str:
         resp.raise_for_status()
         data = resp.json()
-        return data["choices"][0]["message"]["content"]
+        _record_usage(data)
+        return data["choices"][0]["message"].get("content") or ""
 
     # -- public API ---------------------------------------------------------
 
@@ -271,6 +290,40 @@ class LLMClient:
 
     def close(self) -> None:
         self._client.close()
+
+
+def _record_usage(data: dict) -> None:
+    """Append one line per LLM call to logs/llm_usage.jsonl (tokens per pipeline stage)."""
+    try:
+        import json, sys
+        from datetime import datetime, timezone
+        from applypilot.config import LOG_DIR
+        usage = data.get("usage") or {}
+        stage = "other"
+        f = sys._getframe(1)
+        while f is not None:
+            mod = f.f_globals.get("__name__", "")
+            if mod.startswith("applypilot.") and not mod.startswith("applypilot.llm"):
+                stage = mod.rsplit(".", 1)[-1]
+                fn = f.f_code.co_name
+                if "judge" in fn:
+                    stage = "judge"
+                break
+            f = f.f_back
+        details = usage.get("completion_tokens_details") or {}
+        cached = (usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0)
+        row = {
+            "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "model": data.get("model"), "stage": stage,
+            "input": usage.get("prompt_tokens", 0), "cached_input": cached,
+            "output": usage.get("completion_tokens", 0),
+            "reasoning": details.get("reasoning_tokens", 0),
+        }
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        with open(LOG_DIR / "llm_usage.jsonl", "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row) + "\n")
+    except Exception:
+        pass  # usage logging must never break a run
 
 
 class _GeminiCompatForbidden(Exception):

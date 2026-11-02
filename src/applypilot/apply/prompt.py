@@ -63,7 +63,10 @@ def _build_profile_summary(profile: dict) -> str:
 
     # Compensation
     currency = comp.get("salary_currency", "USD")
-    lines.append(f"Salary Expectation: ${comp['salary_expectation']} {currency}")
+    salary_line = f"Salary Expectation: {comp['salary_expectation']} {currency} gross per year"
+    if comp.get("salary_notes"):
+        salary_line += f" (by country: {comp['salary_notes']})"
+    lines.append(salary_line)
 
     # Experience
     if exp.get("years_of_experience_total"):
@@ -73,6 +76,14 @@ def _build_profile_summary(profile: dict) -> str:
 
     # Availability
     lines.append(f"Available: {avail.get('earliest_start_date', 'Immediately')}")
+    if avail.get("relocation"):
+        lines.append(f"Relocation: {avail['relocation']}")
+    # Extra verified facts some forms require (date of birth, nationality, ...)
+    for key, val in (personal.get("extra_facts") or {}).items():
+        if val:
+            lines.append(f"{key.replace('_', ' ').title()}: {val}")
+    lines.append("Any personal fact NOT listed above (date of birth, ID numbers, nationality, etc.) is unknown: never guess it. "
+                 "If a form requires it, output RESULT:FAILED:missing_required_<field>.")
 
     # Standard responses
     lines.extend([
@@ -109,13 +120,16 @@ def _build_location_check(profile: dict, search_config: dict) -> str:
     else:
         city_list = primary_city
 
+    reject_patterns = search_config.get("location_reject_non_remote", [])
+    overseas_examples = ", ".join([r for r in reject_patterns if len(r) > 3 and "site" not in r.lower()][:6]) or "another continent"
+
     return f"""== LOCATION CHECK (do this FIRST before any form) ==
 Read the job page. Determine the work arrangement. Then decide:
 - "Remote" or "work from anywhere" -> ELIGIBLE. Apply.
 - "Hybrid" or "onsite" in {city_list} -> ELIGIBLE. Apply.
 - "Hybrid" or "onsite" in another city BUT the posting also says "remote OK" or "remote option available" -> ELIGIBLE. Apply.
 - "Onsite only" or "hybrid only" in any city outside the list above with NO remote option -> NOT ELIGIBLE. Stop immediately. Output RESULT:FAILED:not_eligible_location
-- City is overseas (India, Philippines, Europe, etc.) with no remote option -> NOT ELIGIBLE. Output RESULT:FAILED:not_eligible_location
+- City is in a country outside the acceptable places above (e.g. {overseas_examples}) with no remote option -> NOT ELIGIBLE. Output RESULT:FAILED:not_eligible_location
 - Cannot determine location -> Continue applying. If a screening question reveals it's non-local onsite, answer honestly and let the system reject if needed.
 Do NOT fill out forms for jobs that are clearly onsite in a non-acceptable location. Check EARLY, save time."""
 
@@ -123,24 +137,26 @@ Do NOT fill out forms for jobs that are clearly onsite in a non-acceptable locat
 def _build_salary_section(profile: dict) -> str:
     """Build the salary negotiation instructions.
 
-    Adapts floor, range, and currency from the profile's compensation section.
+    Adapts floor, range, currency and any per-country rule (compensation.salary_notes)
+    from the profile's compensation section.
     """
     comp = profile["compensation"]
     currency = comp.get("salary_currency", "USD")
-    floor = comp["salary_expectation"]
-    range_min = comp.get("salary_range_min", floor)
-    range_max = comp.get("salary_range_max", str(int(floor) + 20000) if floor.isdigit() else floor)
+    floor = str(comp["salary_expectation"])
+    range_min = str(comp.get("salary_range_min", floor))
+    range_max = str(comp.get("salary_range_max", str(int(floor) + 20000) if floor.isdigit() else floor))
     conversion_note = comp.get("currency_conversion_note", "")
+    salary_notes = comp.get("salary_notes", "")
 
     # Compute example hourly rates at 3 salary levels
     try:
         floor_int = int(floor)
         examples = [
-            (f"${floor_int // 1000}K", floor_int // 2080),
-            (f"${(floor_int + 25000) // 1000}K", (floor_int + 25000) // 2080),
-            (f"${(floor_int + 55000) // 1000}K", (floor_int + 55000) // 2080),
+            (f"{floor_int // 1000}K", floor_int // 2080),
+            (f"{(floor_int + 10000) // 1000}K", (floor_int + 10000) // 2080),
+            (f"{(floor_int + 20000) // 1000}K", (floor_int + 20000) // 2080),
         ]
-        hourly_line = ", ".join(f"{sal} = ${hr}/hr" for sal, hr in examples)
+        hourly_line = ", ".join(f"{sal} = {hr} {currency}/hr" for sal, hr in examples)
     except (ValueError, TypeError):
         hourly_line = "Divide annual salary by 2080"
 
@@ -150,16 +166,25 @@ def _build_salary_section(profile: dict) -> str:
     else:
         convert_line = "Posting is in a different currency? -> Target midpoint of their range. Convert if needed."
 
+    if salary_notes:
+        figure_rule = (
+            f"Your expected salary depends on the job's country: {salary_notes} "
+            f"Work out the job's country first; that figure is your FLOOR for this job. "
+            f"If the country is unclear, use {floor} {currency}."
+        )
+    else:
+        figure_rule = f"{floor} {currency} is the FLOOR. Never go below it. But don't always use it either."
+
     return f"""== SALARY (think, don't just copy) ==
-${floor} {currency} is the FLOOR. Never go below it. But don't always use it either.
+{figure_rule} All figures are gross per year.
 
 Decision tree:
-1. Job posting shows a range (e.g. "$120K-$160K")? -> Answer with the MIDPOINT ($140K).
-2. Title says Senior, Staff, Lead, Principal, Architect, or level II/III/IV? -> Minimum $110K {currency}. Use midpoint of posted range if higher.
+1. Job posting shows a range? -> Answer with the MIDPOINT, but never below your floor for that country.
+2. Title says Senior, Staff, Lead, Principal, Architect, or level II/III/IV? -> At least {range_max} {currency}. Use midpoint of posted range if higher.
 3. {convert_line}
-4. No salary info anywhere? -> Use ${floor} {currency}.
-5. Asked for a range? -> Give posted midpoint minus 10% to midpoint plus 10%. No posted range? -> "${range_min}-${range_max} {currency}".
-6. Hourly rate? -> Divide your annual answer by 2080. ({hourly_line})"""
+4. No salary info anywhere? -> Use your figure for the job's country ({floor} {currency} if unclear).
+5. Asked for a range? -> Give posted midpoint minus 10% to midpoint plus 10%. No posted range? -> "{range_min}-{range_max} {currency}", shifted to the country figure.
+6. Hourly or daily rate? -> Divide your annual figure by 2080 hours (or 220 days). ({hourly_line})"""
 
 
 def _build_screening_section(profile: dict) -> str:
@@ -170,19 +195,25 @@ def _build_screening_section(profile: dict) -> str:
     years = exp.get("years_of_experience_total", "multiple")
     target_role = exp.get("target_role", personal.get("current_job_title", "software engineer"))
     work_auth = profile["work_authorization"]
+    relocation = profile.get("availability", {}).get("relocation") or "cannot relocate"
 
     return f"""== SCREENING QUESTIONS (be strategic) ==
 Hard facts -> answer truthfully from the profile. No guessing. This includes:
-  - Location/relocation: lives in {city}, cannot relocate
+  - Location/relocation: lives in {city}; {relocation}
   - Work authorization: {work_auth.get('legally_authorized_to_work', 'see profile')}
   - Citizenship, clearance, licenses, certifications: answer from profile only
   - Criminal/background: answer from profile only
+
+Preference / willingness / availability questions (relocate, travel, hybrid or onsite, shifts, start-date flexibility, contract type, overtime, background check consent, references on request, "open to other roles") -> choose the option most likely to advance the application. These are choices, not facts.
+Hard facts NEVER bend to improve odds: nationality, citizenship, visas and permits, degrees, certifications, years of experience, languages, date of birth, employment history. Those come from the profile and resume only.
 
 Skills and tools -> be confident. This candidate is a {target_role} with {years} years experience. If the question asks "Do you have experience with [tool]?" and it's in the same domain (DevOps, backend, ML, cloud, automation), answer YES. Software engineers learn tools fast. Don't sell short.
 
 Open-ended questions ("Why do you want this role?", "Tell us about yourself", "What interests you?") -> Write 2-3 sentences. Be specific to THIS job. Reference something from the job description. Connect it to a real achievement from the resume. No generic fluff. No "I am passionate about..." -- sound like a real person.
 
-EEO/demographics -> "Decline to self-identify" or "Prefer not to say" for everything."""
+Language questions -> answer ONLY with the "Languages" fact in the profile (levels as given). Never add a language that is not listed there.
+Mandatory salutation / title / gender fields (Mr/Mme, Sig., Herr/Frau) -> use the profile (male). Date of birth, nationality -> from the profile facts when listed.
+VOLUNTARY EEO / diversity self-identification (ethnicity, disability, veteran, optional gender) -> "Decline to self-identify" or "Prefer not to say"."""
 
 
 def _build_hard_rules(profile: dict) -> str:
@@ -211,7 +242,9 @@ def _build_hard_rules(profile: dict) -> str:
     return f"""== HARD RULES (never break these) ==
 1. Never lie about: citizenship, work authorization, criminal history, education credentials, security clearance, licenses.
 2. {work_auth_rule}
-3. {name_rule}"""
+   If a required question lists specific statuses (citizen, Blue Card, unrestricted / temporary / employer-bound permit, visa types) and none matches the profile wording exactly, do NOT pick any of them, weaker or stronger: a permit type is a fact, not a preference. Choose "Other" / "Prefer to discuss" / "Will explain" when offered; otherwise output RESULT:FAILED:missing_required_work_permit_detail.
+3. {name_rule}
+4. Numbers in screening answers (years with a tool, team sizes, salaries) must come from the profile or be derived from dates in the resume. Say so when you derive one. Never estimate beyond what the resume supports."""
 
 
 def _build_captcha_section() -> str:
@@ -417,9 +450,65 @@ If CapSolver genuinely failed (errorId > 0):
 4. All else fails -> Output RESULT:CAPTCHA."""
 
 
+def _apply_url(job: dict) -> str:
+    """The URL the agent should open: application_url when it is a real URL, else the posting URL."""
+    for key in ("application_url", "url"):
+        val = str(job.get(key) or "").strip()
+        if val and val.lower() not in ("none", "null") and val.startswith("http"):
+            return val
+    return str(job.get("url") or "")
+
+
+def _build_duplicate_check(job: dict) -> str:
+    """List already-applied postings with the same title so the agent can spot the same employer.
+
+    Boards often carry one role several times (per city or per country) and the
+    database has no employer column, so the agent decides from the page itself.
+    """
+    title = (job.get("title") or "").strip().lower()
+    location = (job.get("location") or "").strip().lower()
+    if not title:
+        return ""
+    try:
+        from applypilot.database import get_connection
+        # Same title (any location) OR same exact location (any title): boards repeat one role
+        # per city and per language, so a German and an English posting of one job share a location.
+        rows = get_connection().execute(
+            "SELECT title, site, location, url, substr(coalesce(full_description, description, ''), 1, 160) "
+            "FROM jobs WHERE apply_status IN ('applied', 'in_progress') "
+            "AND url != ? AND (lower(trim(title)) = ? OR (? != '' AND lower(trim(location)) = ?)) "
+            "ORDER BY applied_at DESC LIMIT 8",
+            (job.get("url", ""), title, location, location),
+        ).fetchall()
+    except Exception:
+        return ""
+    if not rows:
+        return ""
+    lines = [
+        f"- {r[0]} | board: {r[1]} | {r[2] or 'location unknown'} | {r[3]}\n"
+        f"    description starts: \"{' '.join(str(r[4] or '').split())}\""
+        for r in rows
+    ]
+    return (
+        "== DUPLICATE CHECK (right after the location check) ==\n"
+        "Applications were ALREADY SUBMITTED through these postings with the same title or the same location "
+        "(a posting in another language counts as the same job):\n"
+        + "\n".join(lines)
+        + "\nThe 'board' column is only where the posting was found (linkedin/indeed), NOT the employer. Read the employer "
+        "name on this page and compare it with the description snippets above (they usually name the company). A DUPLICATE "
+        "means the SAME ROLE at the SAME employer: identical or near-identical title and responsibilities, posted again for "
+        "another city, country, language or job board. If so, do NOT apply again: output RESULT:FAILED:duplicate_application "
+        "and stop. A clearly DIFFERENT position at the same employer (different title and responsibilities, e.g. 'QA Engineer' "
+        "vs 'Senior Software Tester') is NOT a duplicate: apply normally. "
+        "If unsure, check the Gmail inbox for a confirmation from that employer in the last 3 days. "
+        "Only continue when it is clearly a different company.\n"
+    )
+
+
 def build_prompt(job: dict, tailored_resume: str,
                  cover_letter: str | None = None,
-                 dry_run: bool = False) -> str:
+                 dry_run: bool = False,
+                 dest_dir: "Path | None" = None) -> str:
     """Build the full instruction prompt for the apply agent.
 
     Loads the user profile and search config internally. All personal data
@@ -435,8 +524,15 @@ def build_prompt(job: dict, tailored_resume: str,
     Returns:
         Complete prompt string for the AI agent.
     """
-    profile = config.load_profile()
     search_config = config.load_search_config()
+
+    # Language of the posting drives free-text answers (local patch)
+    from applypilot.lang import LANG_NAMES, detect_job_language
+    from applypilot.location import profile_for_job
+    lang_code = detect_job_language(job)
+    lang_name = LANG_NAMES.get(lang_code, "English")
+    # Location fields depend on the job's country (personal.location_by_country)
+    profile = profile_for_job(config.load_profile(), job, lang_code)
     personal = profile["personal"]
 
     # --- Resolve resume PDF path ---
@@ -451,8 +547,13 @@ def build_prompt(job: dict, tailored_resume: str,
     # Copy to a clean filename for upload (recruiters see the filename)
     full_name = personal["full_name"]
     name_slug = full_name.replace(" ", "_")
-    dest_dir = config.APPLY_WORKER_DIR / "current"
+    dest_dir = Path(dest_dir) if dest_dir else config.APPLY_WORKER_DIR / "current"
     dest_dir.mkdir(parents=True, exist_ok=True)
+    # Remove files staged for a previous job so nothing stale can be uploaded
+    for stale in dest_dir.glob("*_Resume.pdf"):
+        stale.unlink(missing_ok=True)
+    for stale in dest_dir.glob("*_Cover_Letter.pdf"):
+        stale.unlink(missing_ok=True)
     upload_pdf = dest_dir / f"{name_slug}_Resume.pdf"
     shutil.copy(str(src_pdf), str(upload_pdf))
     pdf_path = str(upload_pdf)
@@ -480,8 +581,20 @@ def build_prompt(job: dict, tailored_resume: str,
     profile_summary = _build_profile_summary(profile)
     location_check = _build_location_check(profile, search_config)
     salary_section = _build_salary_section(profile)
+    if str(profile.get("availability", {}).get("available_for_contract", "")).lower().startswith("y"):
+        contract_rule = (
+            "- Contract or freelance roles ARE acceptable. If asked for a rate, derive it from the "
+            "contractor figure in the SALARY section. Still NEVER fill availability calendars or "
+            'marketplace "set your rate" onboarding flows.'
+        )
+    else:
+        contract_rule = (
+            '- NEVER agree to hourly/contract rates, availability calendars, or "set your rate" flows. '
+            "You are applying for FULL-TIME salaried positions only."
+        )
     screening_section = _build_screening_section(profile)
     hard_rules = _build_hard_rules(profile)
+    duplicate_check = _build_duplicate_check(job)
     captcha_section = _build_captcha_section()
 
     # Cover letter fallback text
@@ -497,6 +610,30 @@ def build_prompt(job: dict, tailored_resume: str,
 
     # Phone digits only (for fields with country prefix)
     phone_digits = "".join(c for c in personal.get("phone", "") if c.isdigit())
+
+    # Email tools exist only when the Gmail MCP server is configured
+    has_gmail = (Path.home() / ".gmail-mcp" / "gcp-oauth.keys.json").exists()
+    if has_gmail:
+        email_only_rule = (
+            f'If email-only (page says "email resume to X"):\n'
+            f'   - send_email with subject "Application for {job["title"]} -- {full_name}", '
+            f'body = 2-3 sentence pitch + contact info, attach resume PDF: ["{pdf_path}"]\n'
+            f'   - Output RESULT:APPLIED. Done.'
+        )
+        email_verification_rule = "Need email verification? Use search_emails + read_email to get the code."
+    else:
+        email_only_rule = (
+            'If email-only (page says "email resume to X"): you have NO email tool. '
+            "Output RESULT:FAILED:email_only_application and stop."
+        )
+        email_verification_rule = (
+            "Need an email verification code or a confirmation link? The browser is already signed in to the "
+            f"candidate's Gmail ({personal['email']}). Open a NEW tab (browser_tabs action \"new\"), browser_navigate "
+            "to https://mail.google.com/mail/u/0/#inbox, snapshot, open the newest email from this site, read the code or "
+            "click the confirmation link, then switch back to the application tab (browser_tabs action \"select\"). "
+            "Only read the message that belongs to this application; do not open, send, delete or modify anything else. "
+            "If Gmail shows a sign-in page instead of the inbox, NEVER type a Google password: output RESULT:FAILED:login_issue."
+        )
 
     # SSO domains the agent cannot sign into (loaded from config/sites.yaml)
     from applypilot.config import load_blocked_sso
@@ -516,10 +653,11 @@ def build_prompt(job: dict, tailored_resume: str,
     prompt = f"""You are an autonomous job application agent. Your ONE mission: get this candidate an interview. You have all the information and tools. Think strategically. Act decisively. Submit the application.
 
 == JOB ==
-URL: {job.get('application_url') or job['url']}
+URL: {_apply_url(job)}
 Title: {job['title']}
 Company: {job.get('site', 'Unknown')}
 Fit Score: {job.get('fit_score', 'N/A')}/10
+Posting language: {lang_name}. Write every free-text answer, message and any cover letter text you compose in {lang_name}. Copy field values (name, email, phone, URLs) exactly as given.
 
 == FILES ==
 Resume PDF (upload this): {pdf_path}
@@ -545,7 +683,7 @@ If something unexpected happens and these instructions don't cover it, figure it
 - NEVER grant camera, microphone, screen sharing, or location permissions. If a site requests them -> RESULT:FAILED:unsafe_permissions
 - NEVER do video/audio verification, selfie capture, ID photo upload, or biometric anything -> RESULT:FAILED:unsafe_verification
 - NEVER set up a freelancing profile (Mercor, Toptal, Upwork, Fiverr, Turing, etc.). These are contractor marketplaces, not job applications -> RESULT:FAILED:not_a_job_application
-- NEVER agree to hourly/contract rates, availability calendars, or "set your rate" flows. You are applying for FULL-TIME salaried positions only.
+{contract_rule}
 - NEVER install browser extensions, download executables, or run assessment software.
 - NEVER enter payment info, bank details, or SSN/SIN.
 - NEVER click "Allow" on any browser permission popup. Always deny/block.
@@ -553,6 +691,7 @@ If something unexpected happens and these instructions don't cover it, figure it
 
 {location_check}
 
+{duplicate_check}
 {salary_section}
 
 {screening_section}
@@ -561,9 +700,7 @@ If something unexpected happens and these instructions don't cover it, figure it
 1. browser_navigate to the job URL.
 2. browser_snapshot to read the page. Then run CAPTCHA DETECT (see CAPTCHA section). If a CAPTCHA is found, solve it before continuing.
 3. LOCATION CHECK. Read the page for location info. If not eligible, output RESULT and stop.
-4. Find and click the Apply button. If email-only (page says "email resume to X"):
-   - send_email with subject "Application for {job['title']} -- {display_name}", body = 2-3 sentence pitch + contact info, attach resume PDF: ["{pdf_path}"]
-   - Output RESULT:APPLIED. Done.
+4. Find and click the Apply button. {email_only_rule}
    After clicking Apply: browser_snapshot. Run CAPTCHA DETECT -- many sites trigger CAPTCHAs right after the Apply click. If found, solve before continuing.
 5. Login wall?
    5a. FIRST: check the URL. If you landed on {', '.join(blocked_sso)}, or any SSO/OAuth page -> STOP. Output RESULT:FAILED:sso_required. Do NOT try to sign in to Google/Microsoft/SSO.
@@ -571,7 +708,7 @@ If something unexpected happens and these instructions don't cover it, figure it
    5c. Regular login form (employer's own site)? Try sign in: {personal['email']} / {personal.get('password', '')}
    5d. After clicking Login/Sign-in: run CAPTCHA DETECT. Login pages frequently have invisible CAPTCHAs that silently block form submissions. If found, solve it then retry login.
    5e. Sign in failed? Try sign up with same email and password.
-   5f. Need email verification? Use search_emails + read_email to get the code.
+   5f. {email_verification_rule}
    5g. After login, run browser_tabs action "list" again. Switch back to the application tab if needed.
    5h. All failed? Output RESULT:FAILED:login_issue. Do not loop.
 6. Upload resume. ALWAYS upload fresh -- delete any existing resume first, then browser_file_upload with the PDF path above. This is the tailored resume for THIS job. Non-negotiable.

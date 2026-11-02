@@ -73,6 +73,52 @@ REQUIRED_SECTIONS: set[str] = {"SUMMARY", "TECHNICAL SKILLS", "EXPERIENCE", "PRO
 
 # ── Helpers ───────────────────────────────────────────────────────────────
 
+_NUM_RE = re.compile(r"\d+(?:[.,]\d+)?")
+
+
+def _numbers_in(text: str) -> set[str]:
+    """All numeric tokens in text, normalised (1,5 == 1.5)."""
+    return {n.replace(",", ".") for n in _NUM_RE.findall(text or "")}
+
+
+def find_new_numbers(text: str, original_text: str) -> list[str]:
+    """Numbers that appear in `text` but nowhere in `original_text`.
+
+    Language independent: a tailored resume or cover letter may only contain
+    numbers (years, percentages, counts, levels) that the source already has.
+    """
+    allowed = _numbers_in(original_text)
+    seen: list[str] = []
+    for n in _NUM_RE.findall(text or ""):
+        norm = n.replace(",", ".")
+        if norm not in allowed and norm not in seen:
+            seen.append(norm)
+    return seen
+
+
+def find_unknown_skills(skills, allowed: set[str], original_text: str) -> list[str]:
+    """Skill items that are neither in the allowed set nor in the base resume.
+
+    An item passes if it is in `allowed`, appears verbatim in the base resume,
+    or every word of 4+ letters in it appears in the base resume (so paraphrased
+    or translated category items still pass, but "Kubernetes" does not).
+    """
+    if not isinstance(skills, dict):
+        return []
+    text = (original_text or "").lower()
+    unknown: list[str] = []
+    for value in skills.values():
+        for raw in re.split(r"[,;|\n]| / ", str(value)):
+            item = raw.strip().strip(".").lower()
+            if not item or item in allowed or item in text:
+                continue
+            words = [w for w in re.findall(r"[a-zà-ÿ0-9+#.]+", item) if len(w) >= 4]
+            if words and all(w in text for w in words):
+                continue
+            unknown.append(raw.strip())
+    return unknown
+
+
 def _build_skills_set(profile: dict) -> set[str]:
     """Build the set of allowed skills from the profile's skills_boundary."""
     boundary = profile.get("skills_boundary", {})
@@ -115,7 +161,9 @@ def validate_json_fields(data: dict, profile: dict, mode: str = "normal") -> dic
 
     # Required keys — always checked regardless of mode
     for key in ("title", "summary", "skills", "experience", "projects", "education"):
-        if key not in data or not data[key]:
+        if key not in data:
+            errors.append(f"Missing required field: {key}")
+        elif not data[key] and key != "projects":  # an empty projects list is allowed
             errors.append(f"Missing required field: {key}")
     if errors:
         return {"passed": False, "errors": errors, "warnings": warnings}
@@ -293,7 +341,7 @@ def validate_tailored_resume(text: str, profile: dict, original_text: str = "") 
 
 # ── Cover Letter Validation ──────────────────────────────────────────────
 
-def validate_cover_letter(text: str, mode: str = "normal") -> dict:
+def validate_cover_letter(text: str, mode: str = "normal", lang: str = "en") -> dict:
     """Programmatic validation of a cover letter.
 
     Args:
@@ -337,9 +385,11 @@ def validate_cover_letter(text: str, mode: str = "normal") -> dict:
     if found_leaks:
         errors.append(f"LLM self-talk: '{found_leaks[0]}'")
 
-    # 5. Must start with "Dear" — always checked (preamble should have been stripped)
+    # 5. Must start with the salutation for the letter's language — always checked
+    from applypilot.lang import COVER_SALUTATIONS, SALUTATION_PREFIXES
+    prefixes = SALUTATION_PREFIXES.get(lang, SALUTATION_PREFIXES["en"])
     stripped = text.strip()
-    if not stripped.lower().startswith("dear"):
-        errors.append("Must start with 'Dear Hiring Manager,'")
+    if not stripped.lower().startswith(prefixes):
+        errors.append(f"Must start with '{COVER_SALUTATIONS.get(lang, COVER_SALUTATIONS['en'])}'")
 
     return {"passed": len(errors) == 0, "errors": errors, "warnings": warnings}
