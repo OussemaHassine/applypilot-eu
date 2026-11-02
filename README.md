@@ -199,19 +199,21 @@ OpenAI** plus **$5–15 API-equivalent of Claude**. Exact numbers for your own r
 - No invented skills, tools, numbers, titles, seniority or certifications. Programmatic
   checks + an AI judge; strict mode discards anything flagged.
 - CV is one page, includes every project from the base CV, headings in the job's language.
-- Facts come only from `profile.json`; missing facts park the job (`missing_required_*`).
+- Facts come only from `profile.json`; missing facts park the job (`missing_required_*`). Forced permit-type
+  choices follow `work_authorization.permit_choice_rule` (never claims citizenship or a Blue Card).
 - Preference questions (relocation, travel, start date, contract type) get the answer most
   likely to advance the application.
 - One application per role per employer (reposts across cities, boards, languages are skipped).
 - Never: video/selfie/ID verification, payment details, Google/Microsoft single sign-on,
-  emails sent on your behalf, freelance-marketplace profiles, password resets.
+  emails sent on your behalf, freelance-marketplace profiles. Password resets only on employer
+  career sites where an account already exists under your email (never Google/Microsoft/LinkedIn).
 
 ## Troubleshooting
 
 | Symptom | Cause / fix |
 |---|---|
 | Many `no_result_line` failures | Claude usage limit reached before this fork's pause logic; reset those rows (`apply_status=NULL`) |
-| `login_issue` | An account already exists on that career site under your email with another password |
+| `login_issue` | Sign-in and the password reset both failed on that career site (e.g. reset email never arrived) |
 | `sso_required` | Site only offers Google/Microsoft login (refused by design); for LinkedIn, log in to LinkedIn in Chrome and delete `~/ApplyPilot/chrome-workers/` |
 | `missing_required_<x>` | Add `<x>` to `personal.extra_facts` (or the matching field) in `profile.json` |
 | CV rendered with HTML instead of LaTeX | See `<cv>.tex.log` next to the PDF; HTML is the automatic fallback |
