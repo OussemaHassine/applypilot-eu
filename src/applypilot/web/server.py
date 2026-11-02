@@ -241,8 +241,10 @@ class Run:
         fh = open(self.log, "w", encoding="utf-8")
         fh.write(f"$ {' '.join(self.cmd)}\n")
         fh.flush()
+        env = child_env()
+        env["APPLYPILOT_UI_RUN"] = "1"   # daily_run.sh then mirrors its output to stdout for the live view
         self.proc = subprocess.Popen(self.cmd, stdout=fh, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                                     cwd=str(APP_DIR), env=child_env(), start_new_session=True)
+                                     cwd=str(APP_DIR), env=env, start_new_session=True)
         threading.Thread(target=self._wait, args=(fh,), daemon=True).start()
 
     def _wait(self, fh) -> None:
@@ -280,6 +282,9 @@ class Run:
              "running": self.running, "rc": self.rc}
         if tail:
             d["log"] = tail_file(self.log, tail)
+            if self.kind == "round" and len(d["log"].splitlines()) < 5:
+                # older rounds wrote only to the nightly log; show that instead
+                d["log"] += "\n" + tail_file(LOG_DIR / f"nightly-{self.started.date().isoformat()}.log", tail)
         return d
 
 
@@ -548,11 +553,27 @@ def overview():
     }
 
 
+def worker_tails(max_age: int = 180, lines: int = 8) -> list[dict]:
+    """Last lines of the apply agents' notes, for workers active in the last few minutes."""
+    out = []
+    now = time.time()
+    for log in sorted(LOG_DIR.glob("worker-*.log")):
+        try:
+            if now - log.stat().st_mtime > max_age:
+                continue
+            text = tail_file(log, 60)
+        except Exception:
+            continue
+        keep = [l for l in text.splitlines() if l.strip() and not re.match(r"^\s*>> browser_(snapshot|take_screenshot|wait_for)\s*$", l)]
+        out.append({"worker": log.stem, "lines": keep[-lines:]})
+    return out
+
+
 def live_status() -> dict:
-    running = [r.info(tail=6) for r in RUNS.values() if r.running]
+    running = [r.info(tail=40) for r in RUNS.values() if r.running]
     in_prog = rows("SELECT title, location, agent_id, last_attempted_at FROM jobs WHERE apply_status='in_progress'")
     return {"runs": running, "external": external_processes(), "in_progress": in_prog,
-            "next_round": SCHED_STATE["next_round"], "next_inbox": SCHED_STATE["next_inbox"]}
+            "workers": worker_tails(), "next_round": SCHED_STATE["next_round"], "next_inbox": SCHED_STATE["next_inbox"]}
 
 
 @app.get("/api/live")
@@ -690,7 +711,8 @@ def runs_list():
     return {"current": current, "history": history[:30], "external": external_processes(),
             "scheduler": {**SCHED_STATE, "last_inbox": SCHED_STATE["last_inbox"].isoformat(timespec="minutes")
                           if SCHED_STATE["last_inbox"] else None},
-            "nightly_log": tail_file(LOG_DIR / f"nightly-{datetime.now().date().isoformat()}.log", 60)}
+            "workers": worker_tails(),
+            "nightly_log": tail_file(LOG_DIR / f"nightly-{datetime.now().date().isoformat()}.log", 250)}
 
 
 @app.post("/api/runs/{kind}")

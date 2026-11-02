@@ -263,7 +263,7 @@ routes.overview = async (view) => {
     const liveCard = (live.runs.length || live.in_progress.length || live.external.length)
       ? h("div", { class: "card section" }, h("h2", {}, "Running now"),
           h("div", { class: "live" },
-            live.runs.map((run) => h("div", { class: "live-run" }, h("div", { class: "row" }, h("strong", {}, run.label), h("span", { class: "muted small" }, "since " + when(run.started)), h("span", { class: "spacer" }), h("a", { class: "btn sm", href: "#/runs" }, "Open")), h("pre", { class: "log" }, run.log || "…"))),
+            live.runs.map((run) => h("div", { class: "live-run" }, h("div", { class: "row", style: "margin-bottom:6px" }, h("span", { class: "spacer" }), h("a", { class: "btn sm", href: "#/runs" }, "Open full view")), livePanel(run, run.log, live.workers, live.in_progress))),
             live.external.map((x) => h("div", { class: "live-run small" }, "Started outside the UI: ", h("span", { class: "mono" }, x))),
             live.in_progress.length ? h("div", { class: "small" }, "Applying to: ", live.in_progress.map((j) => j.title).join(" · ")) : null))
       : null;
@@ -413,6 +413,43 @@ routes.responses = async (view) => {
   every(30000, () => load().catch(() => {}));
 };
 
+// ── live run panel ─────────────────────────────────────────────────────
+const STAGE_NAMES = { discover: "Finding jobs", enrich: "Fetching job descriptions", pipeline: "Scoring & tailoring", score: "Scoring", tailor: "Tailoring CVs", cover: "Cover letters", pdf: "PDFs", apply: "Applying", inbox: "Checking Gmail", followups: "Email follow-ups" };
+function parseLive(logText) {
+  const lines = (logText || "").split("\n").filter(Boolean);
+  let stage = null, progress = null, last = null;
+  for (const l of lines) {
+    const m = l.match(/^--- (\w+)/) || l.match(/\bFull crawl\b/) && ["", "discover"];
+    if (m) stage = m[1];
+    if (/Scoring \d+ jobs|\] score=/.test(l)) stage = stage === "pipeline" || !stage ? "score" : stage;
+    if (/Tailoring resumes|\[APPROVED\]|\[FAILED_VALIDATION\]/.test(l)) stage = "tailor";
+    if (/Generating cover letters|cover letters done/i.test(l)) stage = "cover";
+    if (/Launching apply pipeline|Chrome started/.test(l)) stage = "apply";
+    const p = l.match(/Progress: (\d+)\/(\d+)/) || l.match(/\[(\d+)\/(\d+)\] /) || l.match(/(\d+)\/(\d+) \[(APPROVED|OK|FAILED[_A-Z]*)\]/);
+    if (p) progress = { done: +p[1], total: +p[2] };
+    if (!/HTTP Request|already have PDFs/.test(l)) last = l;
+  }
+  return { stage, progress, last: last ? last.replace(/^\d\d:\d\d:\d\d - \w+ - /, "") : "" };
+}
+function livePanel(run, logText, workers, inProgress) {
+  const info = parseLive(logText);
+  const started = run ? new Date(run.started) : null;
+  const elapsed = started ? Math.round((Date.now() - started.getTime()) / 60000) : null;
+  const pre = h("pre", { class: "log tall", style: "max-height:420px" }, (logText || "Starting…").split("\n").filter((l) => !/HTTP Request|already have PDFs/.test(l)).join("\n"));
+  requestAnimationFrame(() => { pre.scrollTop = pre.scrollHeight; });
+  return h("div", {},
+    h("div", { class: "row", style: "margin-bottom:8px;gap:12px" },
+      h("span", { class: "chip info" }, "Running"),
+      run && h("strong", {}, run.label),
+      info.stage && h("span", { class: "chip plain" }, "Stage: " + (STAGE_NAMES[info.stage] || info.stage)),
+      info.progress && h("span", { class: "muted small num" }, `${info.progress.done} / ${info.progress.total}`),
+      elapsed != null && h("span", { class: "muted small" }, `${elapsed} min`)),
+    info.last && h("div", { class: "small", style: "margin-bottom:8px;color:var(--ink-2)" }, "Latest: ", h("span", { class: "mono" }, info.last.slice(0, 180))),
+    inProgress && inProgress.length ? h("div", { class: "small", style: "margin-bottom:8px" }, "Browser agents on: ", inProgress.map((j) => h("span", { class: "chip plain" }, j.title.slice(0, 40)))) : null,
+    workers && workers.length ? h("div", { class: "grid g2", style: "margin-bottom:10px" }, workers.map((w) => h("div", { class: "live-run" }, h("div", { class: "small muted", style: "margin-bottom:4px" }, w.worker.replace("worker-", "Browser agent ")), h("pre", { class: "log", style: "margin:0;max-height:160px;font-size:12px" }, w.lines.join("\n"))))) : null,
+    pre);
+}
+
 // ── Runs & schedule ────────────────────────────────────────────────────
 const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 routes.runs = async (view) => {
@@ -432,18 +469,21 @@ routes.runs = async (view) => {
     ["followups", "Email follow-ups", "Click verification links, finish incomplete applications and give consent where an email asks for it."],
   ];
 
+  let liveInProgress = [];
   async function loadRuns() {
-    const r = await api("/api/runs");
+    const [r, live] = await Promise.all([api("/api/runs"), api("/api/live")]);
+    liveInProgress = live.in_progress || [];
+    if (!r.workers) r.workers = live.workers || [];
     const cur = r.current.filter((x) => x.running);
     mount(runsEl, 
       r.external.length ? h("div", { class: "callout", style: "margin-bottom:12px" }, h("div", { class: "row" }, h("span", {}, "An ApplyPilot process started outside the UI is running: ", h("span", { class: "mono small" }, r.external.join(" · "))), h("span", { class: "spacer" }),
         h("button", { class: "btn sm danger", onclick: async () => { const x = await api("/api/runs/external/stop", { method: "POST" }); toast(x.still_running.length ? "Asked it to stop; still finishing" : "Stopped"); loadRuns(); } }, "Stop it"))) : null,
       cur.length ? cur.map((x) => h("div", { class: "live-run", style: "margin-bottom:12px" },
-        h("div", { class: "row" }, h("span", { class: "chip info" }, "Running"), h("strong", {}, x.label), h("span", { class: "muted small" }, (x.trigger === "schedule" ? "scheduled · " : "") + "started " + when(x.started)),
+        h("div", { class: "row", style: "margin-bottom:8px" }, h("span", { class: "muted small" }, (x.trigger === "schedule" ? "scheduled · " : "") + "started " + when(x.started)),
           h("span", { class: "spacer" }), h("button", { class: "btn sm danger", onclick: async () => { await api(`/api/runs/${x.id}/stop`, { method: "POST" }); toast("Stopping…"); } }, "Stop")),
-        h("pre", { class: "log tall" }, x.log || "Starting…")))
+        livePanel(x, x.kind === "round" && (x.log || "").split("\n").length < 5 ? (x.log || "") + "\n" + (r.nightly_log || "") : x.log, r.workers, liveInProgress)))
         : h("p", { class: "muted" }, "Nothing running."),
-      r.nightly_log ? h("details", {}, h("summary", {}, "Today's round log"), h("pre", { class: "log tall" }, r.nightly_log)) : null);
+      !cur.length && r.nightly_log ? h("details", {}, h("summary", {}, "Today's round log"), h("pre", { class: "log tall" }, r.nightly_log)) : null);
     const finished = [...r.current.filter((x) => !x.running), ...r.history].slice(0, 15);
     mount(histEl, finished.length ? h("table", {}, h("thead", {}, h("tr", {}, h("th", {}, "Started"), h("th", {}, "Run"), h("th", {}, "How"), h("th", {}, "Result"), h("th", {}, ""))),
       h("tbody", {}, finished.map((x) => h("tr", {},
@@ -490,7 +530,7 @@ routes.runs = async (view) => {
         h("button", { class: "btn primary", onclick: saveSchedule }, "Save"))),
     h("div", { class: "card section" }, h("h2", {}, "Recent runs"), histEl));
   await loadRuns();
-  every(2500, () => loadRuns().catch(() => {}));
+  every(1500, () => loadRuns().catch(() => {}));
 };
 
 // ── generic form builder (profile) ─────────────────────────────────────

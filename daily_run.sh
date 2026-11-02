@@ -40,10 +40,10 @@ start=$(date +%s)
   echo "--- inbox";     "$AP" inbox --days 3 || true
   echo "--- followups"; "$AP" followups --limit 10 --model "$APPLY_MODEL" $HEADLESS_FLAG || true
   echo "===== done $(date '+%F %T') ====="
-} >> "$LOG" 2>&1 < /dev/null &
+} 2>&1 < /dev/null | if [ "${APPLYPILOT_UI_RUN:-0}" = "1" ]; then tee -a "$LOG"; else cat >> "$LOG"; fi &
 round=$!
 if command -v caffeinate >/dev/null; then caffeinate -i -w "$round"; fi   # macOS: keep awake until the round finishes
-wait "$round"; rc=$?
+wait "$round"; rc=$?   # exit code of the logger; the summary below reports the real outcome
 
 after=$(counts)
 IFS='|' read -r a0 f0 g0 t0 <<< "$before"
