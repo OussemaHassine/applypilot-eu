@@ -242,7 +242,7 @@ def _build_hard_rules(profile: dict) -> str:
     return f"""== HARD RULES (never break these) ==
 1. Never lie about: citizenship, work authorization, criminal history, education credentials, security clearance, licenses.
 2. {work_auth_rule}
-   If a required question lists specific statuses (citizen, Blue Card, unrestricted / temporary / employer-bound permit, visa types) and none matches the profile wording exactly, do NOT pick any of them, weaker or stronger: a permit type is a fact, not a preference. Choose "Other" / "Prefer to discuss" / "Will explain" when offered; otherwise output RESULT:FAILED:missing_required_work_permit_detail.
+   If a required question forces a permit/status choice: follow the profile's permit_choice_rule — choose the general 'valid residence/work permit' option (e.g. 'residence permit allowing work', 'temporary residence permit', 'work permit', 'other valid permit'). NEVER claim EU/EEA citizenship or an EU Blue Card. Only if no such option exists, output RESULT:FAILED:missing_required_work_permit_detail.
 3. {name_rule}
 4. Numbers in screening answers (years with a tool, team sizes, salaries) must come from the profile or be derived from dates in the resume. Say so when you derive one. Never estimate beyond what the resume supports."""
 
@@ -705,9 +705,10 @@ If something unexpected happens and these instructions don't cover it, figure it
 5. Login wall?
    5a. FIRST: check the URL. If you landed on {', '.join(blocked_sso)}, or any SSO/OAuth page -> STOP. Output RESULT:FAILED:sso_required. Do NOT try to sign in to Google/Microsoft/SSO.
    5b. Check for popups. Run browser_tabs action "list". If a new tab/window appeared (login popup), switch to it with browser_tabs action "select". Check the URL there too -- if it's SSO -> RESULT:FAILED:sso_required.
-   5c. Regular login form (employer's own site)? Try sign in: {personal['email']} / {personal.get('password', '')}
+   5c. Regular login form (employer's own site)? Try sign in: {personal['email']} / {personal.get('password', '')} (if rejected for length, try its first 16 characters)
    5d. After clicking Login/Sign-in: run CAPTCHA DETECT. Login pages frequently have invisible CAPTCHAs that silently block form submissions. If found, solve it then retry login.
    5e. Sign in failed? Try sign up with same email and password.
+   5e2. Sign-up says the account/email ALREADY EXISTS? You are allowed to reset that site's password: click 'Forgot password', request the reset email, open the candidate's Gmail in a new tab, open the newest reset email from this site, follow the link, set the password to the profile password (if the site limits length, use its first 16 characters), then sign in and continue. Do this once per site; never reset a Google, Microsoft, LinkedIn or Gmail password.
    5f. {email_verification_rule}
    5g. After login, run browser_tabs action "list" again. Switch back to the application tab if needed.
    5h. All failed? Output RESULT:FAILED:login_issue. Do not loop.
