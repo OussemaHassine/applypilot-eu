@@ -336,10 +336,7 @@ def build_cmd(kind: str) -> tuple[list[str], str]:
     }
     if kind not in table:
         raise HTTPException(400, f"unknown run kind {kind}")
-    cmd, label = table[kind]
-    if kind in ("apply", "apply-dry", "followups") and s.get("HEADLESS", "0") in ("1", "true", "yes"):
-        cmd = cmd + ["--headless"]
-    return cmd, label
+    return table[kind]  # headless is read live from run_settings.env by the apply/followup code
 
 
 def start_run(kind: str, trigger: str = "manual") -> Run:

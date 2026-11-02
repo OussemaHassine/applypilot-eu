@@ -592,9 +592,12 @@ def _is_permanent_failure(result: str) -> bool:
 
 def worker_loop(worker_id: int = 0, limit: int = 1,
                 target_url: str | None = None,
-                min_score: int = 7, headless: bool = False,
+                min_score: int = 7, headless: bool | None = None,
                 model: str = "sonnet", dry_run: bool = False) -> tuple[int, int]:
     """Run jobs sequentially until limit is reached or queue is empty.
+
+    headless=None means: read HEADLESS from run_settings.env before every browser launch,
+    so flipping the switch in the UI takes effect from the next job.
 
     Args:
         worker_id: Numeric worker identifier.
@@ -644,7 +647,8 @@ def worker_loop(worker_id: int = 0, limit: int = 1,
         chrome_proc = None
         try:
             add_event(f"[W{worker_id}] Launching Chrome...")
-            chrome_proc = launch_chrome(worker_id, port=port, headless=headless)
+            hl = headless if headless is not None else config.headless_setting()
+            chrome_proc = launch_chrome(worker_id, port=port, headless=hl)
 
             result, duration_ms = run_job(job, port=port, worker_id=worker_id,
                                             model=model, dry_run=dry_run)
@@ -708,7 +712,7 @@ def worker_loop(worker_id: int = 0, limit: int = 1,
 # ---------------------------------------------------------------------------
 
 def main(limit: int = 1, target_url: str | None = None,
-         min_score: int = 7, headless: bool = False, model: str = "sonnet",
+         min_score: int = 7, headless: bool | None = None, model: str = "sonnet",
          dry_run: bool = False, continuous: bool = False,
          poll_interval: int = 60, workers: int = 1) -> None:
     """Launch the apply pipeline.

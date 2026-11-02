@@ -158,7 +158,7 @@ def _run_agent(prompt: str, port: int, worker_dir: Path, model: str) -> tuple[st
     return (m.group(1).strip() if m else "FAILED:no_result_line"), out
 
 
-def run_followups(limit: int = 10, headless: bool = False, model: str = "sonnet") -> dict:
+def run_followups(limit: int = 10, headless: bool | None = None, model: str = "sonnet") -> dict:
     """Handle pending automatable follow-ups. Returns counts."""
     config.load_env()
     profile = config.load_profile()
@@ -178,7 +178,8 @@ def run_followups(limit: int = 10, headless: bool = False, model: str = "sonnet"
         chrome = None
         t0 = time.time()
         try:
-            chrome = launch_chrome(WORKER_ID, port=port, headless=headless)
+            hl = headless if headless is not None else config.headless_setting()
+            chrome = launch_chrome(WORKER_ID, port=port, headless=hl)
             result, out = _run_agent(prompt, port, worker_dir, model)
         except Exception as exc:
             result, out = f"FAILED:{exc}", str(exc)

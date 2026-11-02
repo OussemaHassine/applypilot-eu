@@ -150,7 +150,7 @@ def apply(
     model: str = typer.Option("haiku", "--model", "-m", help="Claude model name."),
     continuous: bool = typer.Option(False, "--continuous", "-c", help="Run forever, polling for new jobs."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview actions without submitting."),
-    headless: bool = typer.Option(False, "--headless", help="Run browsers in headless mode."),
+    headless: Optional[bool] = typer.Option(None, "--headless/--no-headless", help="Browser without a window. Default: follow HEADLESS in run_settings.env (live)."),
     url: Optional[str] = typer.Option(None, "--url", help="Apply to a specific job URL."),
     gen: bool = typer.Option(False, "--gen", help="Generate prompt file for manual debugging instead of running."),
     mark_applied: Optional[str] = typer.Option(None, "--mark-applied", help="Manually mark a job URL as applied."),
@@ -238,7 +238,7 @@ def apply(
     console.print(f"  Limit:    {'unlimited' if continuous else effective_limit}")
     console.print(f"  Workers:  {workers}")
     console.print(f"  Model:    {model}")
-    console.print(f"  Headless: {headless}")
+    console.print(f"  Headless: {'from run_settings.env (live)' if headless is None else headless}")
     console.print(f"  Dry run:  {dry_run}")
     if url:
         console.print(f"  Target:   {url}")
@@ -328,7 +328,7 @@ def ui(
 @app.command()
 def followups(
     limit: int = typer.Option(10, "--limit", "-l", help="Max follow-ups to handle."),
-    headless: bool = typer.Option(False, "--headless", help="Run the browser without a window."),
+    headless: Optional[bool] = typer.Option(None, "--headless/--no-headless", help="Browser without a window. Default: follow HEADLESS in run_settings.env (live)."),
     model: str = typer.Option("sonnet", "--model", "-m", help="Claude model."),
 ) -> None:
     """Act on emails that need a step: verify links, finish incomplete applications, give consent."""

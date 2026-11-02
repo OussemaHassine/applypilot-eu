@@ -276,3 +276,20 @@ def check_tier(required: int, feature: str) -> None:
             _console.print(f"  - {m}")
     _console.print()
     raise SystemExit(1)
+
+
+def run_setting(key: str, default: str = "") -> str:
+    """Read one value from APP_DIR/run_settings.env (re-read on every call so UI changes apply live)."""
+    path = APP_DIR / "run_settings.env"
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line.startswith(f"{key}="):
+                return line.split("=", 1)[1].split("#", 1)[0].strip().strip('"').strip("'")
+    except Exception:
+        pass
+    return default
+
+
+def headless_setting() -> bool:
+    return run_setting("HEADLESS", "0").lower() in ("1", "true", "yes")
