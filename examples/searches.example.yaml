@@ -13,7 +13,8 @@ sites:
   - linkedin
   # glassdoor removed 2026-11-02: ApplyPilot blocks glassdoor URLs from enrichment and apply,
   # so its 960+ results were dead weight (and the board rate-limits the crawler).
-  - google
+  # google removed 2026-11-02: Google Jobs answers the scraper with HTTP 429 (rate limit) and never
+  # returned a single posting here; it only added noise and time to every search.
 
 # Tier 1 = core QA roles, Tier 2 = adjacent + AI roles, Tier 3 = wide net.
 # Workday portals only use tiers <= workday_max_tier.
