@@ -31,7 +31,8 @@ discover ─► enrich ─► score ─► tailor ─► cover ─► pdf ─►
 | **cover** | Writes a 3-paragraph cover letter in the posting's language, signed with your full name. | LLM |
 | **pdf** | Renders the CV with LaTeX (shrinks to stay on one page) and falls back to HTML if LaTeX fails. | pdflatex / Chromium |
 | **apply** | A Claude agent opens the posting in Chrome (your logged-in profile copy), fills every page, uploads CV and letter, answers screening questions from your profile and submits. Skips duplicates of roles already applied to. | Claude Code CLI + Playwright MCP |
-| **inbox** | Reads recent Gmail, classifies job emails (confirmation, rejection, interview, assessment, offer, info request, recruiter), adds `ApplyPilot/…` labels, sends a macOS notification for real responses and keeps a list in `responses.md`. | IMAP + LLM |
+| **inbox** | Reads recent Gmail, classifies job emails (confirmation, rejection, interview, assessment, offer, info request, recruiter), adds `ApplyPilot/…` labels, keeps a list in `responses.md`, and decides what an assistant can do about each one. Notifies you only for things a human must decide. | IMAP + LLM |
+| **followups** | Acts on emails that ask for a step: clicks verification / activation links, signs in and finishes incomplete applications, gives data-processing consent. Interviews, assessments, offers and anything needing judgment are left to you. | Claude Code CLI + Playwright MCP |
 
 ### What this fork adds to upstream
 
@@ -41,7 +42,7 @@ discover ─► enrich ─► score ─► tailor ─► cover ─► pdf ─►
 - **LaTeX CVs** with automatic one-page fitting and HTML fallback.
 - **Smarter apply agent**: duplicate detection across boards/cities/languages, a strict "never guess facts" rule (parks the job as `missing_required_<fact>` instead), favourable answers to preference questions, Gmail-in-browser for verification codes, pauses (instead of failing jobs) when Claude hits a usage limit.
 - **European search config**: 25 markets including Gulf countries, whole-word location filter that rejects US/Canada/APAC remote postings.
-- **Gmail response tracker** (`applypilot inbox`).
+- **Gmail response tracker** (`applypilot inbox`) and **automatic email follow-ups** (`applypilot followups`): verification links, unfinished applications and consent requests are handled by the agent; only decisions reach you.
 - **Usage logging**: every LLM call → `logs/llm_usage.jsonl`, every application → `logs/apply_usage.jsonl`.
 
 ---
@@ -160,6 +161,7 @@ applypilot dashboard                       # HTML overview of all jobs
 applypilot inbox                           # check Gmail for replies (see below)
 applypilot inbox --watch --interval 10     # keep checking every 10 minutes
 applypilot inbox --show                    # print every company response so far
+applypilot followups --limit 10            # do what the action-needed emails ask (verify, finish, consent)
 ```
 
 Stop anything with `Ctrl+C` twice, or `pkill -INT -f "applypilot apply"`.
