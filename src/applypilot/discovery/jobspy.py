@@ -369,7 +369,12 @@ def _full_crawl(
 
     searches = []
     for q in queries:
+        # Optional per-query `markets: [label, ...]` (local patch 2026-11-02): a title written in one
+        # language only runs in the markets where that language is used, instead of all of them.
+        markets = q.get("markets")
         for loc in locs:
+            if markets and loc.get("label") not in markets:
+                continue
             searches.append({
                 "query": q["query"],
                 "location": loc["location"],

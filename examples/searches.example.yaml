@@ -1,4 +1,4 @@
-# ApplyPilot search configuration (example) (updated 2026-11-02: anywhere in Europe or remote).
+# ApplyPilot search configuration (example) (updated 2026-11-02: anywhere in Europe or remote; QA titles only).
 # Keys below are the ones the code actually reads (the shipped example is partly stale).
 # Edit freely, then re-run: applypilot run discover
 
@@ -16,8 +16,15 @@ sites:
   # google removed 2026-11-02: Google Jobs answers the scraper with HTTP 429 (rate limit) and never
   # returned a single posting here; it only added noise and time to every search.
 
-# Tier 1 = core QA roles, Tier 2 = adjacent + AI roles, Tier 3 = wide net.
-# Workday portals only use tiers <= workday_max_tier.
+# Only software QA / test-automation titles (narrowed 2026-11-02 at Oussama's request: he is a QA /
+# automation engineer, not an AI engineer). Dropped the same day, with the numbers behind it:
+# "AI Engineer" (1098 postings), "Automation Engineer" (1038, PLC/industrial), "Quality Engineer"
+# (821, manufacturing), "LLM Engineer" (407), "AI QA Engineer" (357), "Quality Analyst" (344),
+# "AI Test Engineer" (101) and "Ingegnere QA" (2 postings in 7 runs; Italian boards use the English
+# titles). Those titles brought ~46% of all discovered postings, and of the ~4,400 that were scored
+# only 29 reached the minimum score. They only cost crawl time and scoring tokens.
+# Tier 1 = core QA roles (also used on the Workday portals, see workday_max_tier),
+# Tier 2 = adjacent QA wording. A title with `markets:` runs only in those location labels.
 queries:
   - { query: "QA Engineer", tier: 1 }
   - { query: "QA Automation Engineer", tier: 1 }
@@ -25,26 +32,18 @@ queries:
   - { query: "Software Test Engineer", tier: 1 }
   - { query: "SDET", tier: 1 }
   - { query: "Quality Assurance Engineer", tier: 1 }
-  - { query: "Software Tester", tier: 2 }
-  - { query: "Playwright automation", tier: 2 }
-  - { query: "AI QA Engineer", tier: 2 }
-  - { query: "Ingénieur QA", tier: 2 }
-  - { query: "Testeur logiciel", tier: 2 }
-  - { query: "Automation Engineer", tier: 3 }
-  - { query: "Quality Engineer", tier: 3 }
-  - { query: "AI Engineer", tier: 3 }
-  - { query: "LLM Engineer", tier: 3 }
-  # Added 2026-11-02 04:50 after the first pool was exhausted (69 applications)
   - { query: "Test Engineer", tier: 1 }
   - { query: "QA Analyst", tier: 1 }
   - { query: "Test Analyst", tier: 1 }
+  - { query: "Software Tester", tier: 2 }
   - { query: "QA Specialist", tier: 2 }
   - { query: "Software QA", tier: 2 }
   - { query: "Test Automation", tier: 2 }
-  - { query: "AI Test Engineer", tier: 2 }
-  - { query: "Ingegnere QA", tier: 2 }
-  - { query: "Ingeniero QA", tier: 2 }
-  - { query: "Quality Analyst", tier: 3 }
+  - { query: "Playwright automation", tier: 2 }
+  # Local-language titles, only in the markets where that language is used
+  - { query: "Ingénieur QA", tier: 2, markets: [france, belgium, switzerland, luxembourg, eu-remote] }
+  - { query: "Testeur logiciel", tier: 2, markets: [france, belgium, switzerland, luxembourg, eu-remote] }
+  - { query: "Ingeniero QA", tier: 2, markets: [spain] }
 
 # Each query runs once per location. Country searches use remote: false so they return
 # onsite, hybrid AND remote postings; the EU search adds a remote-only sweep.
@@ -65,7 +64,7 @@ locations:
   - { location: "Denmark", remote: false, label: "denmark", country_indeed: "denmark" }
   - { location: "United Kingdom", remote: false, label: "uk", country_indeed: "uk" }
   - { location: "European Union", remote: true, label: "eu-remote", country_indeed: "italy" }
-  # More European markets 
+  # More European markets (added 2026-11-02 06:30 when the pool ran dry)
   - { location: "Norway", remote: false, label: "norway", country_indeed: "norway" }
   - { location: "Finland", remote: false, label: "finland", country_indeed: "finland" }
   - { location: "Czech Republic", remote: false, label: "czechia", country_indeed: "czech republic" }
@@ -73,7 +72,7 @@ locations:
   - { location: "Romania", remote: false, label: "romania", country_indeed: "romania" }
   - { location: "Greece", remote: false, label: "greece", country_indeed: "greece" }
   - { location: "Luxembourg", remote: false, label: "luxembourg", country_indeed: "luxembourg" }
-  # Gulf 
+  # Gulf (added 2026-11-02 at Oussama's request; Arabic is mentioned only for these)
   - { location: "United Arab Emirates", remote: false, label: "uae", country_indeed: "united arab emirates" }
   - { location: "Qatar", remote: false, label: "qatar", country_indeed: "qatar" }
   - { location: "Saudi Arabia", remote: false, label: "saudi", country_indeed: "saudi arabia" }
@@ -387,7 +386,7 @@ location_reject_non_remote:
 # Apply-time location check (used by the Claude browser agent). Remote jobs are always eligible.
 # Hybrid/onsite jobs are eligible anywhere in Europe (open to relocation).
 location:
-  primary: "Bologna, Italy"
+  primary: "Urbino, Italy"
   accept_patterns:
     - "anywhere in Europe (open to relocation)"
     - "Italy"

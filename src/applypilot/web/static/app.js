@@ -634,9 +634,15 @@ routes.searches = async (view) => {
   const p = parsed;
   p.defaults = p.defaults || {};
   const qRows = h("div", { class: "list-rows" });
-  const drawQ = () => mount(qRows, ...p.queries.map((q, i) => h("div", { class: "list-row", style: "grid-template-columns:1fr 150px 32px" },
+  const nSearches = () => p.queries.reduce((n, q) => n + (q.markets && q.markets.length ? q.markets.length : p.locations.length), 0);
+  const qCols = "grid-template-columns:1fr 150px 230px 32px";
+  const drawQ = () => mount(qRows,
+    h("div", { class: "list-row small muted", style: qCols }, h("span", {}, "Job title"), h("span", {}, "Tier"), h("span", {}, "Only in these markets (labels, blank = all)"), h("span")),
+    ...p.queries.map((q, i) => h("div", { class: "list-row", style: qCols },
     h("input", { type: "text", value: q.query, oninput: (e) => (q.query = e.target.value) }),
     h("select", { onchange: (e) => (q.tier = +e.target.value) }, [1, 2, 3].map((t) => h("option", { value: t, selected: q.tier === t ? "selected" : null }, ["", "Tier 1 · core", "Tier 2 · adjacent", "Tier 3 · wide net"][t]))),
+    h("input", { type: "text", value: (q.markets || []).join(", "), placeholder: "all markets", title: "Comma-separated market labels, e.g. france, belgium",
+      oninput: (e) => { const m = e.target.value.split(",").map((x) => x.trim()).filter(Boolean); if (m.length) q.markets = m; else delete q.markets; } }),
     h("button", { class: "btn sm ghost", "aria-label": "Remove", onclick: () => { p.queries.splice(i, 1); drawQ(); } }, "×"))),
     h("button", { class: "btn sm", style: "justify-self:start", onclick: () => { p.queries.push({ query: "", tier: 2 }); drawQ(); } }, "Add a job title"));
   const lRows = h("div", { class: "list-rows" });
@@ -658,7 +664,7 @@ routes.searches = async (view) => {
   const rawArea = h("textarea", { class: "code", rows: 28 }, raw);
   mount(view, 
     h("div", { class: "head" }, h("div", {}, h("h1", {}, "Job search"), h("p", { class: "sub" }, "What to search for and where. Each title is searched in every market."))),
-    h("div", { class: "form-section" }, h("div", { class: "intro" }, h("h3", {}, "Job titles"), h("p", {}, "Tier 1 also searches company Workday portals. Write titles in any language."), h("p", {}, `${p.queries.length} titles × ${p.locations.length} markets = ${p.queries.length * p.locations.length} searches per run.`)), qRows),
+    h("div", { class: "form-section" }, h("div", { class: "intro" }, h("h3", {}, "Job titles"), h("p", {}, "Tier 1 also searches company Workday portals. Write titles in any language; a title in one language can be limited to the markets where it is spoken."), h("p", {}, `${p.queries.length} titles, ${p.locations.length} markets, ${nSearches()} searches per run.`)), qRows),
     h("div", { class: "form-section" }, h("div", { class: "intro" }, h("h3", {}, "Markets"), h("p", {}, "Countries or cities to search. The Indeed country site must match (italy, france, uk, czech republic, united arab emirates…).")), lRows),
     h("div", { class: "form-section" }, h("div", { class: "intro" }, h("h3", {}, "Freshness & boards")),
       h("div", { class: "fields" },

@@ -101,7 +101,7 @@ applypilot doctor
 |---|---|
 | `profile.json` | Identity, contact, address, per-country location, work rights, notice period, salary rules, languages, extra facts (date of birth, licence…), allowed skills, numbers the CV may quote. **Anything not in this file is never invented**: forms that require it get parked. |
 | `resume_<lang>.txt` | The source of truth for every tailored CV. Add a job, project or skill here and all future CVs include it. |
-| `searches.yaml` | Job titles, markets, freshness, accepted/rejected locations, boards. |
+| `searches.yaml` | Job titles (a title can carry `markets: [label, ...]` to run only in some markets), markets, freshness, accepted/rejected locations, boards. |
 | `run_settings.env` | `MIN_SCORE`, `MAX_APPLY`, `WORKERS`, `APPLY_MODEL`, `HEADLESS`. |
 | `api_keys.env` | `OPENAI_API_KEY` + `LLM_MODEL` (or `GEMINI_API_KEY` / `LLM_URL`), Gmail address + app password. |
 
