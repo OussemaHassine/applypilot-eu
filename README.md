@@ -81,7 +81,8 @@ chmod +x ~/.local/bin/applypilot
 
 ## Configure
 
-All personal data lives **outside the repo** in `~/ApplyPilot/` (the `APPLYPILOT_DIR`).
+All personal data lives **outside the repo** in `~/ApplyPilot/` (the `APPLYPILOT_DIR`). Every file
+below can also be edited from the web app.
 Start from the files in [`examples/`](examples/):
 
 ```bash
@@ -100,10 +101,50 @@ applypilot doctor
 | `profile.json` | Identity, contact, address, per-country location, work rights, notice period, salary rules, languages, extra facts (date of birth, licence…), allowed skills, numbers the CV may quote. **Anything not in this file is never invented**: forms that require it get parked. |
 | `resume_<lang>.txt` | The source of truth for every tailored CV. Add a job, project or skill here and all future CVs include it. |
 | `searches.yaml` | Job titles, markets, freshness, accepted/rejected locations, boards. |
-| `run_settings.env` | `MIN_SCORE`, `MAX_APPLY`, `WORKERS`, `APPLY_MODEL`. |
+| `run_settings.env` | `MIN_SCORE`, `MAX_APPLY`, `WORKERS`, `APPLY_MODEL`, `HEADLESS`. |
 | `api_keys.env` | `OPENAI_API_KEY` + `LLM_MODEL` (or `GEMINI_API_KEY` / `LLM_URL`), Gmail address + app password. |
 
-## Run
+## Web app
+
+```bash
+applypilot ui            # http://127.0.0.1:8765, opens your browser
+```
+
+| Page | What it is for |
+|---|---|
+| **Overview** | Live dashboard: applications sent, replies, interviews, action needed, queue, applications per day, the funnel from posting to application, countries, why applications were not sent, recent activity, what is running right now. Refreshes every 10 s. |
+| **Applications** | Every job by state (sent, ready, needs info, not sent, all matches) with search and country filter. A row opens the tailored CV and cover letter (PDF), why it matched, the employer's emails and the agent's step-by-step notes from the form. |
+| **Responses** | Company replies from Gmail sorted into action needed, interview, test, offer, recruiter, rejection; one click to open the email. |
+| **Runs & schedule** | Start a full round or any single stage, watch the live log, stop it. Daily schedule (time + weekdays) and the Gmail watcher interval. |
+| **Profile** | Every fact employers are told, as a form: identity, address per country, work rights, salary rules, languages, extra facts, allowed skills. Raw JSON editor for anything else. |
+| **Job search** | Job titles and tiers, markets, freshness, boards, accepted and rejected places. Raw YAML editor too. |
+| **Base CVs** | Edit the EN / FR / IT source CVs and preview them as PDF. |
+| **Settings & keys** | Score threshold, applications per round, parallel browsers, model, headless mode, API keys (masked), prices, system check. |
+| **Costs** | Measured token usage and cost per stage and per day, form-filling cost per attempt. |
+
+The scheduler lives inside the app: it runs while `applypilot ui` is running and the machine is
+awake. Every save keeps the previous file in `~/ApplyPilot/backups/`.
+
+### Deploying
+
+The app is a single process (FastAPI + a static frontend, no build step) and needs the same
+tools as the pipeline: Python, Chromium, Node + Claude Code, optionally LaTeX.
+
+- **On your Mac (recommended):** `applypilot ui`. The apply agent uses your real Chrome profile,
+  so LinkedIn and Gmail sessions work, and your Claude subscription covers form filling.
+- **On a server, with Docker:**
+  ```bash
+  export APPLYPILOT_UI_PASSWORD='choose-one' ANTHROPIC_API_KEY='sk-ant-…'
+  docker compose up -d --build        # http://<server>:8765, basic auth with that password
+  ```
+  `./data` is mounted as the data folder and seeded with the example configs on first start;
+  fill in your profile, CVs and keys from the UI. Browsers run headless and start without
+  any logged-in sessions, so LinkedIn Easy Apply and Gmail-in-browser verification do not
+  work there, and the apply agent is billed to the Anthropic API key.
+- Listening on anything other than localhost requires `APPLYPILOT_UI_PASSWORD`; put it
+  behind HTTPS (a reverse proxy or a tunnel) before exposing it to the internet.
+
+## Command line
 
 ```bash
 zsh ~/ApplyPilot/daily_run.sh              # one full round: discover → … → apply (until queue empty)

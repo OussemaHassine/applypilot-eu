@@ -1,0 +1,13 @@
+services:
+  applypilot:
+    build: .
+    image: applypilot-eu
+    ports:
+      - "8765:8765"
+    environment:
+      APPLYPILOT_UI_PASSWORD: ${APPLYPILOT_UI_PASSWORD:?set a password for the web UI}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}   # the apply agent (Claude Code) needs this in a container
+    volumes:
+      - ./data:/data          # profile, CVs, database, outputs
+    shm_size: "1gb"           # Chromium needs more shared memory than the default
+    restart: unless-stopped

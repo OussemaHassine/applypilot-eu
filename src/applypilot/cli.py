@@ -304,6 +304,28 @@ def inbox(
 
 
 @app.command()
+def ui(
+    host: str = typer.Option("127.0.0.1", "--host", help="Interface to bind. Use 0.0.0.0 only with APPLYPILOT_UI_PASSWORD set."),
+    port: int = typer.Option(8765, "--port", "-p", help="Port."),
+    open_browser: bool = typer.Option(True, "--open/--no-open", help="Open the browser."),
+) -> None:
+    """Start the web UI: dashboard, runs, scheduler and settings."""
+    _bootstrap()
+    import os
+    import webbrowser
+    if host not in ("127.0.0.1", "localhost") and not os.environ.get("APPLYPILOT_UI_PASSWORD"):
+        console.print("[red]Refusing to listen on a public interface without APPLYPILOT_UI_PASSWORD.[/red]")
+        raise typer.Exit(code=1)
+    from applypilot.web.server import serve
+    url = f"http://{'127.0.0.1' if host in ('0.0.0.0', '127.0.0.1') else host}:{port}"
+    console.print(f"[bold]ApplyPilot UI[/bold] on {url}  (Ctrl+C to stop; the scheduler runs while this is open)")
+    if open_browser:
+        import threading
+        threading.Timer(1.2, lambda: webbrowser.open(url)).start()
+    serve(host=host, port=port)
+
+
+@app.command()
 def status() -> None:
     """Show pipeline statistics from the database."""
     _bootstrap()

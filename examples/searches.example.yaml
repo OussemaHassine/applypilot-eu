@@ -67,15 +67,15 @@ locations:
   # More European markets 
   - { location: "Norway", remote: false, label: "norway", country_indeed: "norway" }
   - { location: "Finland", remote: false, label: "finland", country_indeed: "finland" }
-  - { location: "Czech Republic", remote: false, label: "czechia", country_indeed: "czechrepublic" }
+  - { location: "Czech Republic", remote: false, label: "czechia", country_indeed: "czech republic" }
   - { location: "Hungary", remote: false, label: "hungary", country_indeed: "hungary" }
   - { location: "Romania", remote: false, label: "romania", country_indeed: "romania" }
   - { location: "Greece", remote: false, label: "greece", country_indeed: "greece" }
   - { location: "Luxembourg", remote: false, label: "luxembourg", country_indeed: "luxembourg" }
   # Gulf 
-  - { location: "United Arab Emirates", remote: false, label: "uae", country_indeed: "unitedarabemirates" }
+  - { location: "United Arab Emirates", remote: false, label: "uae", country_indeed: "united arab emirates" }
   - { location: "Qatar", remote: false, label: "qatar", country_indeed: "qatar" }
-  - { location: "Saudi Arabia", remote: false, label: "saudi", country_indeed: "saudiarabia" }
+  - { location: "Saudi Arabia", remote: false, label: "saudi", country_indeed: "saudi arabia" }
 
 # Glassdoor needs simplified location strings.
 glassdoor_location_map:

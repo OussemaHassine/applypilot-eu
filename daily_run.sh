@@ -16,7 +16,8 @@ LOGDIR="$APPLYPILOT_DIR/logs"
 LOG="$LOGDIR/nightly-$(date +%F).log"
 LOCK="$APPLYPILOT_DIR/.nightly.lock"
 [ -f "$APPLYPILOT_DIR/run_settings.env" ] && source "$APPLYPILOT_DIR/run_settings.env"
-MIN_SCORE="${MIN_SCORE:-7}"; MAX_APPLY="${MAX_APPLY:-60}"; WORKERS="${WORKERS:-2}"; APPLY_MODEL="${APPLY_MODEL:-sonnet}"
+MIN_SCORE="${MIN_SCORE:-7}"; MAX_APPLY="${MAX_APPLY:-60}"; WORKERS="${WORKERS:-2}"; APPLY_MODEL="${APPLY_MODEL:-sonnet}"; HEADLESS="${HEADLESS:-0}"
+HEADLESS_FLAG=""; [ "$HEADLESS" = "1" ] && HEADLESS_FLAG="--headless"
 mkdir -p "$LOGDIR"
 
 # One round at a time: skip if a previous round (or a manual run) is still going.
@@ -24,7 +25,7 @@ if ! mkdir "$LOCK" 2>/dev/null; then
   echo "SKIPPED: another ApplyPilot round is running (lock $LOCK)"; exit 0
 fi
 trap 'rmdir "$LOCK" 2>/dev/null' EXIT
-if pgrep -f "applypilot (apply|run)" >/dev/null; then
+if pgrep -f "python.*applypilot (apply|run)" >/dev/null; then
   echo "SKIPPED: an applypilot process is already running"; exit 0
 fi
 
@@ -35,11 +36,11 @@ start=$(date +%s)
   echo "===== nightly round $(date '+%F %T') ====="
   echo "--- discover";  "$AP" run discover
   echo "--- pipeline";  "$AP" run enrich score tailor cover pdf -w 2 --min-score "$MIN_SCORE" --validation strict
-  echo "--- apply";     "$AP" apply --limit "$MAX_APPLY" --min-score "$MIN_SCORE" --workers "$WORKERS" --model "$APPLY_MODEL"
+  echo "--- apply";     "$AP" apply --limit "$MAX_APPLY" --min-score "$MIN_SCORE" --workers "$WORKERS" --model "$APPLY_MODEL" $HEADLESS_FLAG
   echo "===== done $(date '+%F %T') ====="
 } >> "$LOG" 2>&1 < /dev/null &
 round=$!
-caffeinate -i -w "$round"   # keep the Mac awake until the round finishes
+if command -v caffeinate >/dev/null; then caffeinate -i -w "$round"; fi   # macOS: keep awake until the round finishes
 wait "$round"; rc=$?
 
 after=$(counts)
