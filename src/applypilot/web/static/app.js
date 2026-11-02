@@ -268,11 +268,17 @@ routes.overview = async (view) => {
             live.in_progress.length ? h("div", { class: "small" }, "Applying to: ", live.in_progress.map((j) => j.title).join(" · ")) : null))
       : null;
 
-    const todo = o.todo || { emails: [], forms: [] };
+    const todo = o.todo || { emails: [], forms: [], auto: [] };
+    const FU = { verify_link: "Verify link", complete_application: "Finish application", consent: "Give consent" };
+    const autoCard = (todo.auto || []).length ? h("div", { class: "card section" }, h("div", { class: "row", style: "margin-bottom:10px" }, h("h2", { style: "margin:0" }, "ApplyPilot is handling these"),
+        h("span", { class: "spacer" }), (todo.auto.some((a) => a.followup_status === "pending") ? h("button", { class: "btn sm primary", onclick: () => startRun("followups") }, "Handle now") : null)),
+      h("ul", { class: "feed" }, todo.auto.map((a) => h("li", {}, h("span", { class: "t" }, ago(a.received_at)),
+        h("div", { class: "what" }, h("div", { class: "row", style: "gap:6px" }, h("span", { class: "chip " + (a.followup_status === "done" ? "good" : "info") }, a.followup_status === "done" ? "Done" : "Pending"), h("span", { class: "small muted" }, FU[a.followup] || a.followup)),
+          h("div", { class: "t-title", style: "margin-top:3px" }, a.company || a.subject), h("div", { class: "t-sub" }, a.followup_note || a.summary || "")))))) : null;
     const todoCard = (todo.emails.length || todo.forms.length) ? h("div", { class: "card section" }, h("h2", {}, "Needs you"),
       h("div", { class: "todo" },
         h("div", {}, h("h3", {}, "Emails asking for something"), todo.emails.length ? h("ul", {}, todo.emails.map((e) => h("li", {},
-          h("div", {}, h("div", { class: "t-title" }, e.company || e.subject), h("div", { class: "t-sub" }, e.action || e.summary)),
+          h("div", {}, h("div", { class: "t-title" }, e.company || e.subject), h("div", { class: "t-sub" }, (e.followup_status === "needs_human" || e.followup_status === "failed") ? "ApplyPilot tried: " + (e.followup_note || "") : (e.action || e.summary))),
           h("div", { class: "row" }, h("a", { class: "btn sm", href: e.gmail, target: "_blank", rel: "noopener" }, "Open"),
             h("button", { class: "btn sm ghost", title: "Mark as handled", onclick: async () => { await api("/api/responses/handled", { method: "POST", body: { message_id: e.message_id, handled: true } }); render(); } }, "Done"))))) : h("p", { class: "muted small" }, "Nothing pending.")),
         h("div", {}, h("h3", {}, "Forms waiting for a fact"), todo.forms.length ? h("ul", {}, todo.forms.map((f) => h("li", {},
@@ -293,6 +299,7 @@ routes.overview = async (view) => {
         h("div", { class: "kpi" }, h("div", { class: "l" }, "Queued"), h("div", { class: "v" }, fmtNum(c.queued)), h("div", { class: "d" }, "CV ready, not sent"))),
       liveCard,
       todoCard,
+      autoCard,
       h("div", { class: "grid g-main section" },
         h("div", { class: "card" }, h("h2", {}, "Applications per day, last 14 days"),
           columnChart(o.per_day.map((d) => ({ label: new Date(d.day).toLocaleDateString(undefined, { day: "numeric" }), value: d.n, tip: `${new Date(d.day).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" })}: ${d.n} sent` })))),
@@ -388,9 +395,9 @@ routes.responses = async (view) => {
     let items = d.items;
     if (!cat) items = items.filter((i) => !["confirmation", "job_alert", "other"].includes(i.category));
     mount(listEl, items.length ? h("div", { class: "card flush" }, h("table", {}, h("tbody", {}, items.map((m) => h("tr", {},
-      h("td", { style: "width:150px" }, catChip(m.category), h("div", { class: "t-sub", style: "margin-top:6px" }, when(m.received_at))),
+      h("td", { style: "width:150px" }, catChip(m.category), m.followup && ["verify_link", "complete_application", "consent"].includes(m.followup) ? h("div", { style: "margin-top:6px" }, h("span", { class: "chip " + (m.followup_status === "done" ? "good" : m.followup_status === "pending" ? "info" : "warn") }, "Auto: " + (m.followup_status || "pending"))) : null, h("div", { class: "t-sub", style: "margin-top:6px" }, when(m.received_at))),
       h("td", {}, h("div", { class: "t-title" }, m.company || m.sender), m.role ? h("div", { class: "t-sub" }, m.role) : null,
-        h("div", { style: "margin-top:4px" }, m.summary), m.action ? h("div", { class: "small", style: "margin-top:4px" }, h("strong", {}, "To do: "), m.action) : null),
+        h("div", { style: "margin-top:4px" }, m.summary), m.followup_note ? h("div", { class: "small muted", style: "margin-top:4px" }, "ApplyPilot: " + m.followup_note) : (m.action ? h("div", { class: "small", style: "margin-top:4px" }, h("strong", {}, "To do: "), m.action) : null)),
       h("td", { style: "width:150px;text-align:right" }, h("div", { class: "row", style: "justify-content:flex-end" }, h("a", { class: "btn sm", href: m.gmail, target: "_blank", rel: "noopener" }, "Open in Gmail"),
           h("button", { class: "btn sm ghost", title: m.handled ? "Mark as not handled" : "Mark as handled", onclick: async () => { await api("/api/responses/handled", { method: "POST", body: { message_id: m.message_id, handled: !m.handled } }); load(); } }, m.handled ? "Undo" : "Done")),
         m.job_url ? h("div", { style: "margin-top:6px" }, h("a", { href: "#", class: "small", onclick: (e) => { e.preventDefault(); openJob(m.job_url); } }, "Application")) : null))))))
@@ -422,6 +429,7 @@ routes.runs = async (view) => {
     ["apply", "Apply", "Send applications for everything ready, up to the per-round limit."],
     ["apply-dry", "Dry run", "Fill one form without submitting, to watch the agent."],
     ["inbox", "Check Gmail", "Sort new job emails, label them and notify you."],
+    ["followups", "Email follow-ups", "Click verification links, finish incomplete applications and give consent where an email asks for it."],
   ];
 
   async function loadRuns() {

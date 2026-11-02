@@ -286,7 +286,7 @@ class Run:
 RUNS: dict[str, Run] = {}
 RUNS_LOCK = threading.Lock()
 HISTORY = RUN_DIR / "history.jsonl"
-EXCLUSIVE = {"round", "discover", "pipeline", "apply", "apply-dry"}
+EXCLUSIVE = {"round", "discover", "pipeline", "apply", "apply-dry", "followups"}
 
 
 def _save_history(run: Run) -> None:
@@ -332,11 +332,12 @@ def build_cmd(kind: str) -> tuple[list[str], str]:
                         "--workers", s["WORKERS"], "--model", s["APPLY_MODEL"]], "Apply"),
         "apply-dry": (ap + ["apply", "--dry-run", "--limit", "1", "--model", s["APPLY_MODEL"]], "Dry run (1 job)"),
         "inbox": (ap + ["inbox", "--days", str(load_ui()["inbox"].get("days", 3))], "Check Gmail"),
+        "followups": (ap + ["followups", "--limit", "10", "--model", s["APPLY_MODEL"]], "Email follow-ups"),
     }
     if kind not in table:
         raise HTTPException(400, f"unknown run kind {kind}")
     cmd, label = table[kind]
-    if kind in ("apply", "apply-dry") and s.get("HEADLESS", "0") in ("1", "true", "yes"):
+    if kind in ("apply", "apply-dry", "followups") and s.get("HEADLESS", "0") in ("1", "true", "yes"):
         cmd = cmd + ["--headless"]
     return cmd, label
 
@@ -413,6 +414,16 @@ def scheduler_loop() -> None:
                         pass
             else:
                 SCHED_STATE["next_inbox"] = None
+            if ib.get("enabled") and table_exists("email_responses"):
+                cols = {r["name"] for r in rows("PRAGMA table_info(email_responses)")}
+                pending = scalar("SELECT count(*) FROM email_responses WHERE followup_status='pending'") if "followup_status" in cols else 0
+                busy = any(r.running and r.kind in EXCLUSIVE for r in RUNS.values()) or any(r.running and r.kind == "inbox" for r in RUNS.values())
+                if pending and not busy and not external_processes():
+                    try:
+                        start_run("followups", trigger="schedule")
+                        _sched_event(f"Handling {pending} email follow-up(s)")
+                    except HTTPException:
+                        pass
         except Exception as exc:  # never let the scheduler die
             _sched_event(f"Scheduler error: {exc}")
         time.sleep(20)
@@ -507,12 +518,24 @@ def overview():
                            "sub": r["summary"] or "", "detail": "", "url": None})
     events.sort(key=lambda e: e["at"] or "", reverse=True)
 
-    todo = {"emails": [], "forms": []}
+    todo = {"emails": [], "forms": [], "auto": []}
     if table_exists("email_responses"):
-        todo["emails"] = rows("""SELECT message_id, received_at, company, summary, action, subject FROM email_responses
-            WHERE job_related=1 AND category='info_request' AND coalesce(handled,0)=0 ORDER BY received_at DESC LIMIT 12""")
+        cols = {r["name"] for r in rows("PRAGMA table_info(email_responses)")}
+        has_fu = "followup" in cols
+        fu_sel = ", followup, followup_status, followup_note" if has_fu else ", NULL followup, NULL followup_status, NULL followup_note"
+        # for the human: action-needed emails that are not automatable (or where the assistant gave up)
+        todo["emails"] = rows(f"""SELECT message_id, received_at, company, summary, action, subject{fu_sel} FROM email_responses
+            WHERE job_related=1 AND coalesce(handled,0)=0 AND (
+                  (category='info_request' AND coalesce(followup,'human') NOT IN ('verify_link','complete_application','consent','optional'))
+               OR coalesce(followup_status,'') IN ('needs_human','failed'))
+            ORDER BY received_at DESC LIMIT 12""")
         for e in todo["emails"]:
             e["gmail"] = f"https://mail.google.com/mail/u/0/#search/rfc822msgid%3A{(e['message_id'] or '').strip('<>')}"
+        if has_fu:
+            todo["auto"] = rows("""SELECT message_id, received_at, company, summary, followup, followup_status, followup_note
+                FROM email_responses WHERE followup IN ('verify_link','complete_application','consent')
+                AND coalesce(followup_status,'') IN ('pending','done') AND received_at > datetime('now','-7 days')
+                ORDER BY (followup_status='pending') DESC, received_at DESC LIMIT 15""")
     todo["forms"] = rows("""SELECT url, title, location, replace(apply_error,'missing_required_','') missing FROM jobs
         WHERE apply_status='failed' AND apply_error LIKE 'missing_required%' ORDER BY last_attempted_at DESC LIMIT 20""")
 
@@ -842,6 +865,27 @@ def settings_put(data: dict = Body(...)):
         ui["prices"].update({k: float(v) for k, v in data["prices"].items() if k in ui["prices"]})
         save_ui(ui)
     return settings_get()
+
+
+@app.get("/api/followups")
+def followups_list():
+    if not table_exists("email_responses"):
+        return {"items": [], "pending": 0}
+    cols = {r["name"] for r in rows("PRAGMA table_info(email_responses)")}
+    if "followup" not in cols:
+        return {"items": [], "pending": 0}
+    items = rows("""SELECT message_id, received_at, company, subject, summary, followup, followup_link, followup_status, followup_note
+                    FROM email_responses WHERE followup IN ('verify_link','complete_application','consent')
+                    ORDER BY (followup_status='pending') DESC, received_at DESC LIMIT 100""")
+    return {"items": items, "pending": sum(1 for i in items if i["followup_status"] == "pending")}
+
+
+@app.post("/api/followups/{message_id:path}/reset")
+def followups_reset(message_id: str):
+    with db() as conn:
+        conn.execute("UPDATE email_responses SET followup_status='pending', handled=0 WHERE message_id=?", (message_id,))
+        conn.commit()
+    return {"ok": True}
 
 
 # actions on jobs / emails / external processes ------------------------------

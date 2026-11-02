@@ -326,6 +326,22 @@ def ui(
 
 
 @app.command()
+def followups(
+    limit: int = typer.Option(10, "--limit", "-l", help="Max follow-ups to handle."),
+    headless: bool = typer.Option(False, "--headless", help="Run the browser without a window."),
+    model: str = typer.Option("sonnet", "--model", "-m", help="Claude model."),
+) -> None:
+    """Act on emails that need a step: verify links, finish incomplete applications, give consent."""
+    _bootstrap()
+    from applypilot.config import check_tier
+    check_tier(3, "follow-ups")
+    from applypilot.apply.followup import run_followups
+    st = run_followups(limit=limit, headless=headless, model=model)
+    console.print(f"Follow-ups: {st['done']} done, {st['needs_human']} need you, {st['failed']} failed"
+                  + (" (paused: Claude unavailable)" if st["paused"] else "") + f" of {st['total']}.")
+
+
+@app.command()
 def status() -> None:
     """Show pipeline statistics from the database."""
     _bootstrap()

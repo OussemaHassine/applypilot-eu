@@ -40,7 +40,7 @@ CATEGORIES = {
     "interview": ("Interview", True, "Interview invitation"),
     "assessment": ("Assessment", True, "Test / assessment"),
     "offer": ("Offer", True, "Offer"),
-    "info_request": ("Action needed", True, "They need something from you"),
+    "info_request": ("Action needed", True, "Action needed"),
     "recruiter_outreach": ("Recruiter", True, "Recruiter message"),
     "rejection": ("Rejected", True, "Rejection"),
     "confirmation": ("Applied", False, "Application received"),
@@ -69,7 +69,19 @@ CLASSIFY_PROMPT = """You sort a job seeker's email. The candidate ({name}) has a
 Classify the email below. Return ONLY JSON:
 {{"job_related": true/false, "category": one of {cats}, "company": "employer name or empty",
   "role": "job title if stated or empty", "summary": "one short sentence in English",
-  "action": "what the candidate should do, or empty"}}
+  "action": "what the candidate should do, or empty",
+  "followup": one of ["verify_link", "complete_application", "consent", "optional", "human", "none"],
+  "link": number of the link to open for the follow-up (from LINKS below), or 0}}
+
+FOLLOW-UP means what an automated assistant should do next:
+- verify_link: click a verification / confirmation / activation / "sign in to continue" link that is valid for hours or days
+- complete_application: the application is incomplete or not yet submitted; log in to the portal and finish it
+- consent: give consent to data processing / privacy notice so the application can proceed
+- optional: an optional survey, newsletter choice, profile tip or marketing preference; nothing required
+- human: a decision only the candidate can take (interview scheduling, assessment or test, offer, salary negotiation, questions about them)
+- none: nothing to do (confirmations, rejections, alerts, codes that expire within minutes)
+An email asking to verify an account/email, to continue, finalize or complete an application, to sign in to continue, or to give
+consent gets category info_request. A one-time code that expires within minutes is category other, followup none.
 
 Categories:
 - confirmation: automatic "we received your application" / "thank you for applying"
@@ -89,6 +101,9 @@ Subject: {subject}
 Date: {date}
 
 {body}
+
+LINKS
+{links}
 """
 
 
@@ -101,6 +116,10 @@ def _ensure_table(conn) -> None:
             job_related INTEGER, category TEXT, company TEXT, role TEXT, summary TEXT,
             action TEXT, job_url TEXT, notified INTEGER DEFAULT 0, processed_at TEXT)"""
     )
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(email_responses)").fetchall()}
+    for col in ("handled INTEGER DEFAULT 0", "followup TEXT", "followup_link TEXT", "followup_status TEXT", "followup_note TEXT"):
+        if col.split()[0] not in cols:
+            conn.execute(f"ALTER TABLE email_responses ADD COLUMN {col}")
     conn.commit()
 
 
@@ -155,6 +174,35 @@ def _body_text(msg: email.message.Message, limit: int = 2500) -> str:
     return re.sub(r"\s+", " ", plain).strip()[:limit]
 
 
+_SKIP_LINK = re.compile(r"unsubscribe|mailto:|privacy-policy|facebook\.com|twitter\.com|x\.com/|instagram|linkedin\.com/company|youtube|/legal|desabonn|abbestellen", re.I)
+
+
+def _extract_links(msg: email.message.Message, plain: str, limit: int = 15) -> list[tuple[str, str]]:
+    """(anchor text, url) pairs from the HTML part, plus bare URLs from the text."""
+    links: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for part in msg.walk():
+        if part.get_content_type() != "text/html" or part.get_filename():
+            continue
+        try:
+            html = (part.get_payload(decode=True) or b"").decode(part.get_content_charset() or "utf-8", errors="replace")
+            from bs4 import BeautifulSoup
+            for a in BeautifulSoup(html, "html.parser").find_all("a", href=True):
+                url = a["href"].strip()
+                text = re.sub(r"\s+", " ", a.get_text(" ")).strip()[:60]
+                if url.startswith("http") and url not in seen and not _SKIP_LINK.search(url + " " + text):
+                    seen.add(url)
+                    links.append((text or "(image/button)", url))
+        except Exception:
+            continue
+    for url in re.findall(r"https?://[^\s<>\"')\]]+", plain or ""):
+        url = url.rstrip(".,;")
+        if url not in seen and not _SKIP_LINK.search(url):
+            seen.add(url)
+            links.append(("(in text)", url))
+    return links[:limit]
+
+
 def _looks_job_related(sender: str, subject: str, body: str) -> bool:
     domain = parseaddr(sender)[1].split("@")[-1].lower()
     if any(d in domain for d in ATS_DOMAINS):
@@ -162,15 +210,29 @@ def _looks_job_related(sender: str, subject: str, body: str) -> bool:
     return bool(KEYWORDS.search(subject) or KEYWORDS.search(body[:1500]))
 
 
-def _classify(sender: str, subject: str, date: str, body: str, name: str) -> dict:
+AUTO_FOLLOWUPS = ("verify_link", "complete_application", "consent")
+
+
+def _classify(sender: str, subject: str, date: str, body: str, name: str, links: list[tuple[str, str]] | None = None) -> dict:
     from applypilot.llm import get_client
+    links = links or []
+    link_text = "\n".join(f"{i + 1}. [{t}] {u}" for i, (t, u) in enumerate(links)) or "(none)"
     prompt = CLASSIFY_PROMPT.format(name=name, cats=list(CATEGORIES), sender=sender,
-                                    subject=subject, date=date, body=body)
-    raw = get_client().ask(prompt, max_tokens=400, temperature=0.0)
+                                    subject=subject, date=date, body=body, links=link_text)
+    raw = get_client().ask(prompt, max_tokens=500, temperature=0.0)
     match = re.search(r"\{.*\}", raw, re.S)
     data = json.loads(match.group(0)) if match else {}
     if data.get("category") not in CATEGORIES:
         data["category"] = "other"
+    if data.get("followup") not in ("verify_link", "complete_application", "consent", "optional", "human", "none"):
+        data["followup"] = "human" if data["category"] == "info_request" else "none"
+    try:
+        idx = int(data.get("link") or 0)
+        data["followup_link"] = links[idx - 1][1] if 0 < idx <= len(links) else ""
+    except Exception:
+        data["followup_link"] = ""
+    if data["followup"] in AUTO_FOLLOWUPS and data["category"] not in ("info_request", "other"):
+        data["followup"] = "none"
     return data
 
 
@@ -225,10 +287,13 @@ def check_inbox(days: int = 3, label: bool = True, notify_user: bool = True, dry
             except Exception:
                 received = date_raw
             typ, full = imap.fetch(num, "(BODY.PEEK[]<0.120000>)")  # PEEK: never marks as read
-            body = _body_text(email.message_from_bytes(full[0][1])) if typ == "OK" and full and isinstance(full[0], tuple) else ""
+            parsed = email.message_from_bytes(full[0][1]) if typ == "OK" and full and isinstance(full[0], tuple) else None
+            body = _body_text(parsed) if parsed else ""
+            links = _extract_links(parsed, body) if parsed else []
             row = {"message_id": mid, "received_at": received, "sender": sender, "subject": subject,
                    "job_related": 0, "category": None, "company": "", "role": "", "summary": "",
-                   "action": "", "job_url": None, "notified": 0}
+                   "action": "", "job_url": None, "notified": 0, "followup": None, "followup_link": None,
+                   "followup_status": None, "followup_note": None, "handled": 0, "_links": links}
             candidates.append((num, row, body))
 
         from concurrent.futures import ThreadPoolExecutor
@@ -238,7 +303,7 @@ def check_inbox(days: int = 3, label: bool = True, notify_user: bool = True, dry
             if not _looks_job_related(row["sender"], row["subject"], body):
                 return item, None
             try:
-                return item, _classify(row["sender"], row["subject"], row["received_at"], body, name)
+                return item, _classify(row["sender"], row["subject"], row["received_at"], body, name, row.get("_links"))
             except Exception as exc:
                 log.warning("Classification failed for %r: %s", row["subject"][:60], exc)
                 return item, "error"
@@ -256,10 +321,19 @@ def check_inbox(days: int = 3, label: bool = True, notify_user: bool = True, dry
                            summary=c.get("summary", ""), action=c.get("action", ""))
                 if row["job_related"]:
                     row["job_url"] = _match_job(conn, row["company"], row["role"])
+                    row["followup"] = c.get("followup", "none")
+                    row["followup_link"] = c.get("followup_link") or None
+                    if row["followup"] in AUTO_FOLLOWUPS:
+                        row["followup_status"] = "pending"   # ApplyPilot will handle it (applypilot followups)
+                    elif row["followup"] == "optional":
+                        row["handled"] = 1
+                        row["followup_status"] = "skipped"
+                        row["followup_note"] = "Optional; nothing required, skipped automatically."
                     lbl, should_notify, title = CATEGORIES[row["category"]]
                     if label and lbl and not dry_run:
                         imap.store(num, "+X-GM-LABELS", f'("{LABEL_ROOT}/{lbl}")')
-                    if should_notify and notify_user and not dry_run:
+                    # only disturb the user for things an assistant cannot do
+                    if should_notify and notify_user and not dry_run and row["followup"] in ("human", "none"):
                         who = row["company"] or parseaddr(row["sender"])[0] or parseaddr(row["sender"])[1]
                         notify(f"{title}: {who}", row["summary"] or row["subject"], sound=row["category"] in POSITIVE)
                         row["notified"] = 1
@@ -267,11 +341,12 @@ def check_inbox(days: int = 3, label: bool = True, notify_user: bool = True, dry
             if not dry_run:
                 conn.execute(
                     "INSERT OR REPLACE INTO email_responses (message_id, received_at, sender, subject, job_related, "
-                    "category, company, role, summary, action, job_url, notified, processed_at) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "category, company, role, summary, action, job_url, notified, processed_at, handled, followup, "
+                    "followup_link, followup_status, followup_note) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (row["message_id"], row["received_at"], row["sender"], row["subject"], row["job_related"],
                      row["category"], row["company"], row["role"], row["summary"], row["action"], row["job_url"],
-                     row["notified"], datetime.now(timezone.utc).isoformat(timespec="seconds")),
+                     row["notified"], datetime.now(timezone.utc).isoformat(timespec="seconds"), row.get("handled", 0),
+                     row.get("followup"), row.get("followup_link"), row.get("followup_status"), row.get("followup_note")),
                 )
                 conn.commit()
         return new
