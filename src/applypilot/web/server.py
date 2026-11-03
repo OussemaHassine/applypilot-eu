@@ -816,6 +816,47 @@ def searches_put(data: dict = Body(...)):
     return {"saved": True}
 
 
+# watch / hide the worker browsers (local patch 2026-11-03: "switch between live vision and headless") ----
+
+def _worker_chrome_pids() -> list[int]:
+    try:
+        out = subprocess.run(["pgrep", "-f", "remote-debugging-port=92"], capture_output=True, text=True).stdout.split()
+        return [int(x) for x in out]
+    except Exception:
+        return []
+
+
+def _set_worker_windows_visible(visible: bool) -> int:
+    """Hide/show the windows of running worker browsers (macOS, best effort: the first call asks
+    for permission to control System Events). Headless browsers have no window to show."""
+    pids = _worker_chrome_pids()
+    if not pids or os.uname().sysname != "Darwin":
+        return 0
+    ids = ", ".join(str(x) for x in pids)
+    script = (f'tell application "System Events" to set visible of '
+              f'(every process whose unix id is in {{{ids}}}) to {"true" if visible else "false"}')
+    try:
+        r = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=8)
+        return len(pids) if r.returncode == 0 else 0
+    except Exception:
+        return 0
+
+
+@app.get("/api/watch")
+def watch_get():
+    return {"watch": not config.headless_setting()}
+
+
+@app.post("/api/watch")
+def watch_set(data: dict = Body(...)):
+    """watch=true: browsers get a visible window from the next job on (and hidden ones reappear);
+    watch=false: browsers run headless from the next job on, and open windows are hidden now."""
+    watch = bool(data.get("watch"))
+    write_env_values(RUN_SETTINGS, {"HEADLESS": "0" if watch else "1"})
+    touched = _set_worker_windows_visible(watch)
+    return {"watch": watch, "windows_touched": touched}
+
+
 @app.get("/api/resumes")
 def resumes_get():
     out = {}

@@ -48,6 +48,29 @@ function toast(msg, err = false) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => (t.className = "toast"), err ? 5000 : 2400);
 }
+
+// ── Watch browsers (visible windows vs headless), one click, applies from the next job ──
+let WATCH = null;
+async function loadWatch() {
+  try { WATCH = (await api("/api/settings")).run.HEADLESS !== "1"; } catch (e) { /* keep last value */ }
+}
+async function setWatch(on) {
+  WATCH = on;
+  try {
+    await api("/api/settings", { method: "PUT", body: { run: { HEADLESS: on ? "0" : "1" } } });
+    let touched = 0;
+    try { touched = (await api("/api/watch", { method: "POST", body: { watch: on } })).windows_touched || 0; } catch (e) { /* older server */ }
+    toast(on ? "Browsers get a window from the next job on" + (touched ? "; hidden windows shown" : "")
+             : "Browsers run hidden from the next job on" + (touched ? "; open windows hidden now" : ""));
+  } catch (e) { toast(e.message, true); }
+}
+function watchSwitch() {
+  const cb = h("input", { type: "checkbox", class: "switch", onchange: (e) => setWatch(e.target.checked) });
+  cb.checked = WATCH === true;
+  return h("label", { class: "check small", style: "margin-left:auto;white-space:nowrap",
+    title: "On: every job opens a visible Chrome window you can watch. Off: browsers run headless, nothing pops up. Takes effect at the next job; windows already open are hidden right away." },
+    cb, "Watch browsers");
+}
 const fmtNum = (n) => (n == null ? "–" : Number(n).toLocaleString());
 function ago(iso) {
   if (!iso) return "";
@@ -255,6 +278,7 @@ async function jobAction(url, action, msg) {
 
 // ── Overview ────────────────────────────────────────────────────────────
 routes.overview = async (view) => {
+  await loadWatch();
   const render = async () => {
     const o = await api("/api/overview");
     const c = o.counts, r = o.responses.by || {};
@@ -444,7 +468,7 @@ function livePanel(run, logText, workers, inProgress) {
       run && h("strong", {}, run.label),
       info.stage && h("span", { class: "chip plain" }, "Stage: " + (STAGE_NAMES[info.stage] || info.stage)),
       info.progress && h("span", { class: "muted small num" }, `${info.progress.done} / ${info.progress.total}`),
-      elapsed != null && h("span", { class: "muted small" }, `${elapsed} min`)),
+      elapsed != null && h("span", { class: "muted small" }, `${elapsed} min`), watchSwitch()),
     info.last && h("div", { class: "small", style: "margin-bottom:8px;color:var(--ink-2)" }, "Latest: ", h("span", { class: "mono" }, info.last.slice(0, 180))),
     inProgress && inProgress.length ? h("div", { class: "small", style: "margin-bottom:8px" }, "Browser agents on: ", inProgress.map((j) => h("span", { class: "chip plain" }, j.title.slice(0, 40)))) : null,
     workers && workers.length ? h("div", { class: "grid g2", style: "margin-bottom:10px" }, workers.map((w) => h("div", { class: "live-run" }, h("div", { class: "small muted", style: "margin-bottom:4px" }, w.worker.replace("worker-", "Browser agent ")), h("pre", { class: "log", style: "margin:0;max-height:160px;font-size:12px" }, w.lines.join("\n"))))) : null,
@@ -454,6 +478,7 @@ function livePanel(run, logText, workers, inProgress) {
 // ── Runs & schedule ────────────────────────────────────────────────────
 const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 routes.runs = async (view) => {
+  await loadWatch();
   const sched = await api("/api/schedule");
   const s = sched.schedule, ib = sched.inbox;
   const runsEl = h("div");
@@ -517,7 +542,7 @@ routes.runs = async (view) => {
     h("div", { class: "grid g3" }, actions.map(([k, title, desc, primary]) => h("div", { class: "card" },
       h("h3", {}, title), h("p", { class: "muted small", style: "min-height:40px;margin:0 0 12px" }, desc),
       h("button", { class: "btn" + (primary ? " primary" : ""), onclick: () => startRun(k) }, "Start")))),
-    h("div", { class: "card section" }, h("h2", {}, "Live"), runsEl),
+    h("div", { class: "card section" }, h("div", { class: "row", style: "margin-bottom:8px" }, h("h2", { style: "margin:0" }, "Live"), watchSwitch()), runsEl),
     h("div", { class: "grid g2 section" },
       h("div", { class: "card" }, h("h2", {}, "Daily round"),
         h("label", { class: "check", style: "margin-bottom:14px" }, enabled, "Run a full round automatically"),
