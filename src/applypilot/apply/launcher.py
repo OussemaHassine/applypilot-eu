@@ -573,7 +573,12 @@ _CLI_PAUSE_MARKERS: tuple[str, ...] = (
 )
 PAUSE_ON_CLI_LIMIT_SECONDS = 900
 
-PERMANENT_PREFIXES: tuple[str, ...] = ("site_blocked", "cloudflare", "blocked_by", "email_only_application", "no_job_url", "not_a_job_application", "unsafe_", "duplicate_application")
+PERMANENT_PREFIXES: tuple[str, ...] = (
+    "site_blocked", "cloudflare", "blocked_by", "email_only", "no_job_url", "not_a_job_application",
+    "unsafe_", "duplicate_application",
+    # The posting itself rules the candidate out (location, work authorization, salary): retrying cannot change it.
+    "not_eligible_",
+)
 
 
 def _is_permanent_failure(result: str) -> bool:

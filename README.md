@@ -30,7 +30,7 @@ discover ─► enrich ─► score ─► tailor ─► pdf ─► apply (cover
 | **tailor** | Edits your own CV text for the job: the title line, the profile paragraph, the order of bullets/skills/projects, and at most 4 reworded bullets. Everything else stays identical and is checked line by line against the base CV; a judge model then checks for invented facts. Rendered with the Charter LaTeX template that reproduces the look of the original CVs (`**bold**` in the base text renders bold). | LLM |
 | **cover** | On demand only: while applying, the agent runs `applypilot cover-letter --url …` when the form has a cover-letter field or upload. 3 paragraphs in the posting's language, signed with your full name. Not written for forms without such a field. | LLM |
 | **pdf** | Renders the CV with LaTeX (shrinks to stay on one page) and falls back to HTML if LaTeX fails. | pdflatex / Chromium |
-| **apply** | A Claude agent opens the posting in Chrome (your logged-in profile copy), fills every page, uploads CV and letter, answers screening questions from your profile and submits. Skips duplicates of roles already applied to. | Claude Code CLI + Playwright MCP |
+| **apply** | A Claude agent opens the posting in Chrome (your logged-in profile copy), fills every page, uploads CV and letter, answers screening questions from your profile and submits. Skips duplicates of roles already applied to. Postings with no form ("send your CV to …") are answered by email: the agent writes the message and runs `applypilot send-email` (Gmail SMTP, tailored CV attached, one email per job, ledger in `logs/sent_emails.jsonl`). PDFs in `~/ApplyPilot/documents/` (degree certificate, ID) are offered to forms that require them. | Claude Code CLI + Playwright MCP |
 | **inbox** | Reads recent Gmail, classifies job emails (confirmation, rejection, interview, assessment, offer, info request, recruiter), adds `ApplyPilot/…` labels, keeps a list in `responses.md`, and decides what an assistant can do about each one. Notifies you only for things a human must decide. | IMAP + LLM |
 | **followups** | Acts on emails that ask for a step: clicks verification / activation links, signs in and finishes incomplete applications, gives data-processing consent. Interviews, assessments, offers and anything needing judgment are left to you. | Claude Code CLI + Playwright MCP |
 
@@ -172,8 +172,8 @@ any scheduler that can run a shell command on this machine.
 
 Outputs in `~/ApplyPilot/`: `applypilot.db` (every job and its status), `tailored_resumes/`
 (`.txt`, `.pdf`, `.tex`, the job text and a validation report per job), `cover_letters/`,
-`logs/` (`nightly-<date>.log`, `worker-*.log` with the agent's step-by-step notes),
-`responses.md`.
+`logs/` (`nightly-<date>.log`, `worker-*.log` with the agent's step-by-step notes,
+`sent_emails.jsonl` for applications sent by email), `responses.md`.
 
 ### Gmail response tracker
 

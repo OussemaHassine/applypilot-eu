@@ -196,11 +196,17 @@ def _build_screening_section(profile: dict) -> str:
     target_role = exp.get("target_role", personal.get("current_job_title", "software engineer"))
     work_auth = profile["work_authorization"]
     relocation = profile.get("availability", {}).get("relocation") or "cannot relocate"
+    extra = personal.get("extra_facts") or {}
+    sponsorship_line = f"; sponsorship: {work_auth['sponsorship_rule']}" if work_auth.get("sponsorship_rule") else ""
+    grade_rule = extra.get("school_grade") or "not in the profile: if a form requires one, RESULT:FAILED:missing_required_school_grade"
+    relatives = extra.get("relatives_in_public_administration") or "not in the profile"
 
     return f"""== SCREENING QUESTIONS (be strategic) ==
 Hard facts -> answer truthfully from the profile. No guessing. This includes:
   - Location/relocation: lives in {city}; {relocation}
-  - Work authorization: {work_auth.get('legally_authorized_to_work', 'see profile')}
+  - Work authorization: {work_auth.get('legally_authorized_to_work', 'see profile')}{sponsorship_line}
+  - School / degree grades (Abschlussnote, voto, mention, GPA, class of honours): {grade_rule}
+  - Relatives at the employer or in public administration (parenti nella PA): {relatives}
   - Citizenship, clearance, licenses, certifications: answer from profile only
   - Criminal/background: answer from profile only
 
@@ -234,6 +240,18 @@ def _build_hard_rules(profile: dict) -> str:
     work_auth_rule = "Work auth: Answer truthfully from profile."
     if permit_type:
         work_auth_rule = f"Work auth: {permit_type}. Sponsorship needed: {sponsorship}."
+    # Sponsorship depends on the job's country and work arrangement (user rule 2026-11-03)
+    sponsorship_rule = work_auth.get("sponsorship_rule", "")
+    if sponsorship_rule:
+        work_auth_rule += (
+            f"\n   SPONSORSHIP depends on where the job is: {sponsorship_rule}\n"
+            "   Decide from the posting's country and work arrangement (you read them in the LOCATION CHECK). "
+            "Answer sponsorship / right-to-work questions accordingly and CONTINUE the application: needing "
+            "sponsorship is an honest answer, not a reason to stop. Output RESULT:FAILED:not_eligible_work_auth "
+            "only when the posting or the form makes an existing right to work mandatory with no sponsorship option "
+            "(e.g. 'no sponsorship offered', or a required 'Do you have the right to work in X?' where a truthful "
+            "'No' blocks submission)."
+        )
 
     name_rule = f'Name: Legal name = {full_name}.'
     if preferred_name and preferred_name != full_name.split()[0]:
@@ -579,6 +597,21 @@ def build_prompt(job: dict, tailored_resume: str,
             shutil.copy(str(cl_pdf_src), str(cl_upload))
             cl_upload_path = str(cl_upload)
 
+    # --- Other documents the candidate provided (~/ApplyPilot/documents/*.pdf), e.g. a degree certificate ---
+    staged_docs: list[str] = []
+    docs_dir = config.APP_DIR / "documents"
+    if docs_dir.is_dir():
+        for src in sorted(docs_dir.glob("*.pdf")):
+            dst = dest_dir / src.name
+            shutil.copy(str(src), str(dst))
+            staged_docs.append(str(dst))
+    if staged_docs:
+        documents_line = ("Other documents (upload one ONLY when a form requires that exact document, never elsewhere):\n"
+                          + "\n".join(f"  - {p}" for p in staged_docs))
+    else:
+        documents_line = ("Other documents (degree certificate, ID, transcripts): none available. If a form REQUIRES "
+                          "such an upload -> RESULT:FAILED:missing_required_<document>.")
+
     # --- Build all prompt sections ---
     profile_summary = _build_profile_summary(profile)
     location_check = _build_location_check(profile, search_config)
@@ -599,11 +632,13 @@ def build_prompt(job: dict, tailored_resume: str,
     duplicate_check = _build_duplicate_check(job)
     captcha_section = _build_captcha_section()
 
+    # The applypilot CLI the agent may call with the Bash tool (cover letters, application emails)
+    import sys as _sys
+    cover_cmd = str(Path(_sys.executable).parent / "applypilot")
+
     # Cover letter: written on demand, only when the form has a place for one (user rule 2026-11-03)
     city = personal.get("city", "the area")
     if not cover_letter_text:
-        import sys as _sys
-        cover_cmd = str(Path(_sys.executable).parent / "applypilot")
         cl_display = (
             "NOT WRITTEN YET. Cover letters are produced only when an application has a place for one.\n"
             "If this form has a cover-letter field or upload (required OR optional), run this command with the "
@@ -619,24 +654,52 @@ def build_prompt(job: dict, tailored_resume: str,
     else:
         cl_display = cover_letter_text
 
-    # Phone digits only (for fields with country prefix)
+    # Phone digits only (for fields with country prefix); the country to pick in prefix lists
     phone_digits = "".join(c for c in personal.get("phone", "") if c.isdigit())
+    phone_country = ((personal.get("extra_facts") or {}).get("phone_country_code")
+                     or "the country of the profile phone number")
 
-    # Email tools exist only when the Gmail MCP server is configured
+    # Email-only postings: the agent writes the message and sends it with `applypilot send-email`
+    # (Gmail SMTP, same app password as the inbox tracker). Local patch 2026-11-03.
+    from applypilot.mailer import is_configured as _smtp_ready
     has_gmail = (Path.home() / ".gmail-mcp" / "gcp-oauth.keys.json").exists()
-    if has_gmail:
+    if _smtp_ready():
+        body_file = str(dest_dir / "application_email.txt")
+        email_only_rule = (
+            'If the posting has NO application form and says to apply by email ("send your CV to ...", '
+            '"candidature par e-mail", "inviare il CV a ..."), apply by email:\n'
+            "   a. Copy the recipient address EXACTLY as written on the posting. No address visible -> "
+            "RESULT:FAILED:email_only_no_address. Never guess, derive or look up an address.\n"
+            f"   b. Write the message in {lang_name} to the file {body_file} (Write tool): a greeting, 3-5 sentences "
+            f'naming the role ("{job["title"]}") and why the candidate fits it, using ONLY facts from the TAILORED '
+            "RESUME, then a closing with the full name, phone, email and LinkedIn from the APPLICANT PROFILE. "
+            "No invented facts, no salary unless the posting asks for one.\n"
+            "   c. If the posting asks for a cover letter, run the cover-letter command from the COVER LETTER "
+            "section first and attach its PDF too.\n"
+            "   d. Send it with the Bash tool and wait for it to finish:\n"
+            f'      "{cover_cmd}" send-email --to "<address>" --subject "<Application for {job["title"]} - '
+            f'{full_name}, written in {lang_name}>" --body-file "{body_file}" --attach "{pdf_path}" '
+            f'--job-url "{job["url"]}"\n'
+            '      (add --attach "<cover letter PDF>" when one was written; --cc "<address>" only for a second '
+            "address the posting names)\n"
+            "   e. EMAIL_SENT printed -> output RESULT:APPLIED and stop. EMAIL_ERROR printed -> "
+            "RESULT:FAILED:email_send_error (<the error>). Run the command ONCE; never resend."
+        )
+    elif has_gmail:
         email_only_rule = (
             f'If email-only (page says "email resume to X"):\n'
             f'   - send_email with subject "Application for {job["title"]} -- {full_name}", '
             f'body = 2-3 sentence pitch + contact info, attach resume PDF: ["{pdf_path}"]\n'
             f'   - Output RESULT:APPLIED. Done.'
         )
-        email_verification_rule = "Need email verification? Use search_emails + read_email to get the code."
     else:
         email_only_rule = (
             'If email-only (page says "email resume to X"): you have NO email tool. '
             "Output RESULT:FAILED:email_only_application and stop."
         )
+    if has_gmail:
+        email_verification_rule = "Need email verification? Use search_emails + read_email to get the code."
+    else:
         email_verification_rule = (
             "Need an email verification code or a confirmation link? The browser is already signed in to the "
             f"candidate's Gmail ({personal['email']}). Open a NEW tab (browser_tabs action \"new\"), browser_navigate "
@@ -673,6 +736,7 @@ Posting language: {lang_name}. Write every free-text answer, message and any cov
 == FILES ==
 Resume PDF (upload this): {pdf_path}
 Cover Letter PDF (upload if asked): {cl_upload_path or "none yet -- see the COVER LETTER section"}
+{documents_line}
 
 == RESUME TEXT (use when filling text fields) ==
 {tailored_resume}
@@ -739,7 +803,7 @@ RESULT:EXPIRED -- job closed or no longer accepting applications
 RESULT:CAPTCHA -- blocked by unsolvable captcha
 RESULT:LOGIN_ISSUE -- could not sign in or create account
 RESULT:FAILED:not_eligible_location -- onsite outside acceptable area, no remote option
-RESULT:FAILED:not_eligible_work_auth -- requires unauthorized work location
+RESULT:FAILED:not_eligible_work_auth -- an existing right to work is mandatory and no sponsorship is possible (see HARD RULES)
 RESULT:FAILED:reason -- any other failure (brief reason)
 
 == BROWSER EFFICIENCY ==
@@ -756,7 +820,7 @@ RESULT:FAILED:reason -- any other failure (brief reason)
 - File upload not working? Try: (1) browser_click the upload button/area, (2) browser_file_upload with the path. If still failing, look for a hidden file input or a "Select file" link and click that first.
 - Dropdown won't fill? browser_click to open it, then browser_click the option.
 - Checkbox won't check via fill_form? Use browser_click on it instead. Snapshot to verify.
-- Phone field with country prefix: just type digits {phone_digits}
+- Phone field with country prefix: select the country code first ({phone_country}), then type digits {phone_digits}. If the list truly lacks it, type the full number +{phone_digits} into the number field. A country code is never a reason to stop.
 - Date fields: {datetime.now().strftime('%m/%d/%Y')}
 - Validation errors after submit? Take BOTH snapshot AND screenshot. Snapshot shows text errors, screenshot shows red-highlighted fields. Fix all, retry.
 - Honeypot fields (hidden, "leave blank"): skip them.

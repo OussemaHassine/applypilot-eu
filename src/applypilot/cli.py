@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Optional
 
 import typer
@@ -363,6 +364,45 @@ def cover_letter(
     typer.echo("COVER_LETTER_TEXT_BEGIN")
     typer.echo(r["text"])
     typer.echo("COVER_LETTER_TEXT_END")
+
+
+@app.command("send-email")
+def send_email(
+    to: list[str] = typer.Option(..., "--to", help="Recipient address, exactly as shown in the posting (repeat for several, max 3)."),
+    subject: str = typer.Option(..., "--subject", help="Subject line, in the posting's language."),
+    body_file: str = typer.Option(..., "--body-file", help="Plain-text file holding the message body."),
+    attach: list[str] = typer.Option([], "--attach", help="PDF to attach (repeat). The tailored CV goes here."),
+    job_url: Optional[str] = typer.Option(None, "--job-url", help="The job's URL (jobs.url): one email per job, recorded in logs/sent_emails.jsonl."),
+    cc: list[str] = typer.Option([], "--cc", help="Copy address (repeat), only when the posting names one."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Build and print the message, send nothing."),
+    force: bool = typer.Option(False, "--force", help="Send even if an email for this job URL was already sent."),
+) -> None:
+    """Send ONE application email from the candidate's Gmail (postings with no form, "send your CV to ...").
+
+    Used by the apply agent. Prints EMAIL_SENT ... on success, EMAIL_ERROR=... (exit 1) otherwise.
+    """
+    _bootstrap()
+    from applypilot.mailer import EmailError, send_application_email
+
+    try:
+        body = Path(body_file).expanduser().read_text(encoding="utf-8")
+    except OSError as exc:
+        typer.echo(f"EMAIL_ERROR=cannot read body file: {exc}")
+        raise typer.Exit(code=1)
+    try:
+        rec = send_application_email(to, subject, body, attach, job_url=job_url, cc=cc,
+                                     dry_run=dry_run, force=force)
+    except EmailError as exc:
+        typer.echo(f"EMAIL_ERROR={exc}")
+        raise typer.Exit(code=1)
+    if dry_run:
+        typer.echo(f"EMAIL_DRY_RUN to={','.join(rec['to'])} subject={rec['subject']!r} "
+                   f"attachments={','.join(rec['attachments']) or 'none'}")
+        typer.echo("--- body ---")
+        typer.echo(body.strip())
+        return
+    typer.echo(f"EMAIL_SENT to={','.join(rec['to'])} message_id={rec['message_id']} "
+               f"attachments={','.join(rec['attachments']) or 'none'}")
 
 
 @app.command()
