@@ -642,6 +642,20 @@ def run_tailoring(min_score: int = 7, limit: int = 20,
         results.append(result)
         stats[result.get("status", "error")] = stats.get(result.get("status", "error"), 0) + 1
 
+        # local patch 2026-11-03: record each job immediately. The batch used to be written only at
+        # the end of the run, so finished CVs stayed invisible to the apply stage for the whole run
+        # and were lost when the run was stopped.
+        _ok = {"approved"} if validation_mode == "strict" else {"approved", "approved_with_judge_warning"}
+        if result.get("status") in _ok and result.get("path"):
+            conn.execute(
+                "UPDATE jobs SET tailored_resume_path=?, tailored_at=?, "
+                "tailor_attempts=COALESCE(tailor_attempts,0)+1 WHERE url=?",
+                (result["path"], datetime.now(timezone.utc).isoformat(), result["url"]),
+            )
+        else:
+            conn.execute("UPDATE jobs SET tailor_attempts=COALESCE(tailor_attempts,0)+1 WHERE url=?", (result["url"],))
+        conn.commit()
+
         elapsed = time.time() - t0
         rate = completed / elapsed if elapsed > 0 else 0
         log.info(
@@ -654,22 +668,7 @@ def run_tailoring(min_score: int = 7, limit: int = 20,
             result["title"][:40],
         )
 
-    # Persist to DB: increment attempt counter for ALL, save path only for approved
-    now = datetime.now(timezone.utc).isoformat()
-    _success_statuses = {"approved"} if validation_mode == "strict" else {"approved", "approved_with_judge_warning"}
-    for r in results:
-        if r["status"] in _success_statuses:
-            conn.execute(
-                "UPDATE jobs SET tailored_resume_path=?, tailored_at=?, "
-                "tailor_attempts=COALESCE(tailor_attempts,0)+1 WHERE url=?",
-                (r["path"], now, r["url"]),
-            )
-        else:
-            conn.execute(
-                "UPDATE jobs SET tailor_attempts=COALESCE(tailor_attempts,0)+1 WHERE url=?",
-                (r["url"],),
-            )
-    conn.commit()
+    # Results are persisted per job inside the loop (see above).
 
     elapsed = time.time() - t0
     log.info(
