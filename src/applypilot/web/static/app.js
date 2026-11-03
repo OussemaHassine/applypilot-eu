@@ -64,6 +64,14 @@ async function setWatch(on) {
              : "Browsers run hidden from the next job on" + (touched ? "; open windows hidden now" : ""));
   } catch (e) { toast(e.message, true); }
 }
+const OPEN_DETAILS = new Set();
+function stickyDetails(key, summary, body) {
+  // the Runs page re-renders every 1.5 s; remember which <details> the user opened
+  const d = h("details", {}, h("summary", {}, summary), body);
+  d.open = OPEN_DETAILS.has(key);
+  d.addEventListener("toggle", () => { if (d.open) OPEN_DETAILS.add(key); else OPEN_DETAILS.delete(key); });
+  return d;
+}
 function watchSwitch() {
   const cb = h("input", { type: "checkbox", class: "switch", onchange: (e) => setWatch(e.target.checked) });
   cb.checked = WATCH === true;
@@ -509,7 +517,7 @@ routes.runs = async (view) => {
           h("span", { class: "spacer" }), h("button", { class: "btn sm danger", onclick: async () => { await api(`/api/runs/${x.id}/stop`, { method: "POST" }); toast("Stopping…"); } }, "Stop")),
         livePanel(x, x.kind === "round" && (x.log || "").split("\n").length < 5 ? (x.log || "") + "\n" + (r.nightly_log || "") : x.log, r.workers, liveInProgress)))
         : h("p", { class: "muted" }, "Nothing running."),
-      !cur.length && r.nightly_log ? h("details", {}, h("summary", {}, "Today's round log"), h("pre", { class: "log tall" }, r.nightly_log)) : null);
+      !cur.length && r.nightly_log ? stickyDetails("nightly-log", "Today's round log", h("pre", { class: "log tall" }, r.nightly_log)) : null);
     const finished = [...r.current.filter((x) => !x.running), ...r.history].slice(0, 15);
     mount(histEl, finished.length ? h("table", {}, h("thead", {}, h("tr", {}, h("th", {}, "Started"), h("th", {}, "Run"), h("th", {}, "How"), h("th", {}, "Result"), h("th", {}, ""))),
       h("tbody", {}, finished.map((x) => h("tr", {},
