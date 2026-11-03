@@ -43,7 +43,7 @@ RUN_DIR = LOG_DIR / "ui-runs"
 LANGS = ("en", "fr", "it")
 
 DEFAULT_UI = {
-    "schedule": {"enabled": False, "time": "00:00", "days": [0, 1, 2, 3, 4, 5, 6]},
+    "schedule": {"enabled": False, "time": "00:00", "days": [0, 1, 2, 3, 4, 5, 6], "auto_apply": True},
     "inbox": {"enabled": False, "interval_min": 10, "days": 3},
     "prices": {  # USD per 1M tokens
         "llm_input": 0.10, "llm_cached_input": 0.01, "llm_output": 0.50,
@@ -345,13 +345,23 @@ def build_cmd(kind: str) -> tuple[list[str], str]:
     return table[kind]  # headless is read live from run_settings.env by the apply/followup code
 
 
-# Which runs cannot overlap (local patch 2026-11-03): applying and tailoring use different
-# resources (Claude + browser vs. the OpenAI pipeline) and may run side by side; two browser
-# runs, or two pipeline runs, may not.
-_BROWSER = {"apply", "apply-dry", "followups", "round"}
-_PIPELINE = {"pipeline", "discover", "round"}
-CONFLICTS = {k: (_BROWSER if k in ("apply", "apply-dry", "followups") else _PIPELINE if k in ("pipeline", "discover")
-                 else _BROWSER | _PIPELINE) for k in EXCLUSIVE}
+# Which runs cannot overlap (2026-11-03). A kind only blocks on runs that use the same
+# resource: applying uses the worker Chrome profiles (ports 9222+), follow-ups their own
+# profile (worker 9, port 9231), enrich/score/tailor the OpenAI pipeline, discovery the
+# boards. Gmail checks never block anything. A full round uses all of them.
+CONFLICTS = {
+    "apply":     {"apply", "apply-dry", "round"},
+    "apply-dry": {"apply", "apply-dry", "round"},
+    "followups": {"followups", "round"},
+    "pipeline":  {"pipeline", "round"},
+    "discover":  {"discover", "round"},
+    "round":     set(EXCLUSIVE),
+}
+# ... and which processes started outside the UI (CLI, scripts, launchd) block each kind
+_EXTERNAL_BLOCKERS = {
+    "apply": r"applypilot apply", "apply-dry": r"applypilot apply", "followups": r"applypilot followups",
+    "pipeline": r"applypilot run (?!discover)", "discover": r"applypilot run discover", "round": r".",
+}
 
 
 def start_run(kind: str, trigger: str = "manual") -> Run:
@@ -361,9 +371,7 @@ def start_run(kind: str, trigger: str = "manual") -> Run:
             busy = [r for r in RUNS.values() if r.running and r.kind in blockers]
             if busy:
                 raise HTTPException(409, f"'{busy[0].label}' is already running")
-            ext = external_processes()
-            if kind in ("apply", "apply-dry", "followups"):
-                ext = [e for e in ext if "applypilot apply" in e or "daily_run" in e]
+            ext = [e for e in external_processes() if re.search(_EXTERNAL_BLOCKERS[kind], e)]
             if ext:
                 raise HTTPException(409, "An ApplyPilot process started outside the UI is running: " + ext[0][:80])
         if kind == "inbox" and any(r.running and r.kind == "inbox" for r in RUNS.values()):
@@ -401,6 +409,41 @@ def next_round_time(ui: dict, now: datetime | None = None) -> datetime | None:
     return None
 
 
+def _ready_to_apply() -> int:
+    """Jobs the apply launcher would pick up right now (same rule as apply/launcher.py)."""
+    s = run_settings()
+    return scalar("SELECT count(*) FROM jobs WHERE fit_score >= ? AND tailored_resume_path IS NOT NULL "
+                  "AND (apply_status IS NULL OR apply_status = 'failed') AND COALESCE(apply_attempts, 0) < ?",
+                  (int(s["MIN_SCORE"]), config.DEFAULTS["max_apply_attempts"])) or 0
+
+
+def _auto_apply(ui: dict, now: datetime) -> None:
+    """Start an Apply run whenever tailored jobs are waiting, so applying never waits for the
+    nightly round (user, 2026-11-03). Replaces the launchd continuous apply, which the UI could
+    neither see nor control. MAX_APPLY=0 makes each run take everything ready, then stop."""
+    if not ui["schedule"].get("auto_apply", True):
+        return
+    if any(r.running and r.kind in CONFLICTS["apply"] for r in RUNS.values()):
+        return
+    ready = _ready_to_apply()
+    if not ready:
+        return
+    last = SCHED_STATE.get("auto_apply") or {}
+    # an Apply run that ended with the same jobs still waiting means the launcher cannot take
+    # them right now (usage limit, browser trouble, ...): retry every 20 minutes, not every tick
+    wait_min = 20 if last.get("ready") == ready else 3
+    if last.get("at") and (now - last["at"]).total_seconds() < wait_min * 60:
+        return
+    try:
+        start_run("apply", trigger="auto")
+        SCHED_STATE["auto_apply"] = {"at": now, "ready": ready}
+        _sched_event(f"Auto-apply started: {ready} job(s) ready")
+    except HTTPException as exc:
+        if exc.detail != last.get("msg"):
+            _sched_event(f"Auto-apply waiting: {exc.detail}")
+        SCHED_STATE["auto_apply"] = {"at": now, "ready": ready, "msg": exc.detail}
+
+
 def scheduler_loop() -> None:
     while True:
         try:
@@ -416,6 +459,7 @@ def scheduler_loop() -> None:
                     _sched_event(f"Scheduled round skipped: {exc.detail}")
                 ui["last_round_date"] = now.date().isoformat()
                 save_ui(ui)
+            _auto_apply(ui, now)
             ib = ui["inbox"]
             if ib.get("enabled"):
                 last = SCHED_STATE["last_inbox"]
@@ -433,8 +477,10 @@ def scheduler_loop() -> None:
             if ib.get("enabled") and table_exists("email_responses"):
                 cols = {r["name"] for r in rows("PRAGMA table_info(email_responses)")}
                 pending = scalar("SELECT count(*) FROM email_responses WHERE followup_status='pending'") if "followup_status" in cols else 0
-                busy = any(r.running and r.kind in EXCLUSIVE for r in RUNS.values()) or any(r.running and r.kind == "inbox" for r in RUNS.values())
-                if pending and not busy and not external_processes():
+                # follow-ups use their own browser profile, so only another follow-up run, a full
+                # round or a Gmail check (which writes the same rows) holds them back
+                busy = any(r.running and r.kind in ("followups", "round", "inbox") for r in RUNS.values())
+                if pending and not busy:
                     try:
                         start_run("followups", trigger="schedule")
                         _sched_event(f"Handling {pending} email follow-up(s)")
@@ -775,7 +821,7 @@ def schedule_put(data: dict = Body(...)):
     sch, ib = data.get("schedule", {}), data.get("inbox", {})
     if "time" in sch and not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", sch["time"]):
         raise HTTPException(400, "time must be HH:MM")
-    ui["schedule"].update({k: v for k, v in sch.items() if k in ("enabled", "time", "days")})
+    ui["schedule"].update({k: v for k, v in sch.items() if k in ("enabled", "time", "days", "auto_apply")})
     ui["inbox"].update({k: v for k, v in ib.items() if k in ("enabled", "interval_min", "days")})
     save_ui(ui)
     nxt = next_round_time(ui)

@@ -242,7 +242,7 @@ async function pollSide() {
     el.classList.toggle("running", !!running);
     let txt;
     if (l.runs.length) txt = "Running: " + l.runs.map((r) => r.label).join(", ");
-    else if (l.external.length) txt = "Running outside the UI";
+    else if (l.external.length) txt = "Outside the UI: " + l.external.map((x) => x.replace(/^applypilot /, "").split(" ").slice(0, 2).join(" ")).join(", ");
     else txt = "Idle";
     if (l.in_progress.length) txt += ` · ${l.in_progress.length} applying`;
     const next = l.next_round ? "Next round " + when(l.next_round) : "No round scheduled";
@@ -508,10 +508,10 @@ routes.runs = async (view) => {
   const nextEl = h("p", { class: "muted small" });
 
   const actions = [
-    ["round", "Full round", "Find new jobs, score them, tailor CVs and letters, then apply until the queue is empty.", true],
+    ["round", "Full round", "Find new jobs, score them, tailor CVs, then apply until the queue is empty.", true],
     ["discover", "Find jobs", "Search all boards and markets for new postings."],
-    ["pipeline", "Score & tailor", "Fetch descriptions, score fit, write CVs, cover letters and PDFs."],
-    ["apply", "Apply", "Send applications for everything ready, up to the per-round limit."],
+    ["pipeline", "Score & tailor", "Fetch descriptions, score fit, write CVs and PDFs (cover letters only when a form asks for one)."],
+    ["apply", "Apply", "Send applications for everything ready. Also starts by itself when auto-apply is on."],
     ["apply-dry", "Dry run", "Fill one form without submitting, to watch the agent."],
     ["inbox", "Check Gmail", "Sort new job emails, label them and notify you."],
     ["followups", "Email follow-ups", "Click verification links, finish incomplete applications and give consent where an email asks for it."],
@@ -551,13 +551,14 @@ routes.runs = async (view) => {
   }
 
   const enabled = h("input", { type: "checkbox", class: "switch", checked: s.enabled });
+  const autoApply = h("input", { type: "checkbox", class: "switch", checked: s.auto_apply !== false });
   const timeIn = h("input", { type: "time", value: s.time, style: "max-width:130px" });
   const dayBoxes = DAY_NAMES.map((n, i) => h("label", {}, h("input", { type: "checkbox", value: i, checked: s.days.includes(i) }), h("span", {}, n)));
   const ibEnabled = h("input", { type: "checkbox", class: "switch", checked: ib.enabled });
   const ibInterval = h("input", { type: "number", min: 2, max: 240, value: ib.interval_min, style: "max-width:90px" });
   async function saveSchedule() {
     try {
-      const body = { schedule: { enabled: enabled.checked, time: timeIn.value, days: dayBoxes.map((l) => $("input", l)).filter((x) => x.checked).map((x) => +x.value) },
+      const body = { schedule: { enabled: enabled.checked, time: timeIn.value, days: dayBoxes.map((l) => $("input", l)).filter((x) => x.checked).map((x) => +x.value), auto_apply: autoApply.checked },
         inbox: { enabled: ibEnabled.checked, interval_min: +ibInterval.value || 10 } };
       await api("/api/schedule", { method: "PUT", body });
       toast("Schedule saved");
@@ -577,6 +578,8 @@ routes.runs = async (view) => {
         h("label", { class: "check", style: "margin-bottom:14px" }, enabled, "Run a full round automatically"),
         h("div", { class: "row", style: "margin-bottom:12px" }, h("span", { class: "small muted", style: "width:50px" }, "At"), timeIn),
         h("div", { class: "days", style: "margin-bottom:14px" }, dayBoxes),
+        h("label", { class: "check", style: "margin-bottom:6px" }, autoApply, "Apply as soon as tailored CVs are ready, any time of day"),
+        h("p", { class: "muted small", style: "margin:0 0 14px" }, "Starts an Apply run whenever scored jobs with a CV are waiting (browsers follow the Watch switch above)."),
         h("button", { class: "btn primary", onclick: saveSchedule }, "Save schedule"), nextEl),
       h("div", { class: "card" }, h("h2", {}, "Gmail watcher"),
         h("label", { class: "check", style: "margin-bottom:14px" }, ibEnabled, "Check Gmail for replies automatically"),
