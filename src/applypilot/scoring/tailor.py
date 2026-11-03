@@ -578,7 +578,9 @@ def run_tailoring(min_score: int = 7, limit: int = 20,
             # Build safe filename prefix
             safe_title = re.sub(r"[^\w\s-]", "", job["title"])[:50].strip().replace(" ", "_")
             safe_site = re.sub(r"[^\w\s-]", "", job["site"])[:20].strip().replace(" ", "_")
-            prefix = f"{safe_site}_{safe_title}"
+            import hashlib
+            tag = hashlib.sha1(job["url"].encode("utf-8")).hexdigest()[:8]   # local patch 2026-11-03:
+            prefix = f"{safe_site}_{safe_title}_{tag}"                       # same title at the same site must not share files
 
             # Save tailored resume text
             txt_path = TAILORED_DIR / f"{prefix}.txt"

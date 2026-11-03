@@ -341,6 +341,30 @@ def followups(
                   + (" (paused: Claude unavailable)" if st["paused"] else "") + f" of {st['total']}.")
 
 
+@app.command("cover-letter")
+def cover_letter(
+    url: str = typer.Option(..., "--url", help="The job's URL (jobs.url) to write the cover letter for."),
+    dest: Optional[str] = typer.Option(None, "--dest", help="Also copy the PDF into this folder as <Name>_Cover_Letter.pdf."),
+) -> None:
+    """Write the cover letter for ONE job, on demand.
+
+    The apply agent runs this only when the application form has a cover-letter field or upload,
+    so letters are not produced in bulk. Prints COVER_LETTER_PDF=, COVER_LETTER_TXT= and the text.
+    """
+    _bootstrap()
+    from applypilot.scoring.cover_letter import generate_for_job
+    try:
+        r = generate_for_job(url, validation_mode="strict", dest_dir=dest)
+    except Exception as exc:
+        typer.echo(f"COVER_LETTER_ERROR={exc}")
+        raise typer.Exit(code=1)
+    typer.echo(f"COVER_LETTER_PDF={r['pdf'] or 'N/A'}")
+    typer.echo(f"COVER_LETTER_TXT={r['txt']}")
+    typer.echo("COVER_LETTER_TEXT_BEGIN")
+    typer.echo(r["text"])
+    typer.echo("COVER_LETTER_TEXT_END")
+
+
 @app.command()
 def status() -> None:
     """Show pipeline statistics from the database."""

@@ -353,3 +353,67 @@ def run_cover_letters(min_score: int = 7, limit: int = 20,
         "errors": error_count,
         "elapsed": elapsed,
     }
+
+
+def generate_for_job(url: str, validation_mode: str = "strict",
+                     dest_dir: "str | None" = None) -> dict:
+    """Write the cover letter for ONE job, on demand (local patch 2026-11-03).
+
+    `applypilot cover-letter --url ...` calls this; the apply agent runs that command only when
+    the application form actually has a cover-letter field or upload, so letters are no longer
+    produced in bulk for every scored job. Reuses an existing letter when one was already written.
+
+    Returns {"txt": path, "pdf": path | None, "text": letter, "lang": lang}.
+    """
+    import shutil
+    from pathlib import Path as _P
+
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM jobs WHERE url=?", (url,)).fetchone()
+    if not row:
+        raise ValueError(f"no job with url {url}")
+    job = dict(row)
+    profile = load_profile()
+    lang = detect_job_language(job)
+
+    existing = job.get("cover_letter_path")
+    if existing and _P(existing).exists():
+        cl_path = _P(existing)
+        letter = cl_path.read_text(encoding="utf-8")
+        pdf = cl_path.with_suffix(".pdf")
+        pdf_path = str(pdf) if pdf.exists() else None
+    else:
+        if not job.get("full_description"):
+            raise ValueError("job has no full description yet (run enrich first)")
+        letter = generate_cover_letter(load_resume_text(lang), job, profile,
+                                       validation_mode=validation_mode, lang=lang)
+        if not letter.strip():
+            conn.execute("UPDATE jobs SET cover_attempts=COALESCE(cover_attempts,0)+1 WHERE url=?", (url,))
+            conn.commit()
+            raise ValueError("cover letter failed validation after all retries")
+        safe_title = re.sub(r"[^\w\s-]", "", job["title"])[:50].strip().replace(" ", "_")
+        safe_site = re.sub(r"[^\w\s-]", "", job["site"])[:20].strip().replace(" ", "_")
+        COVER_LETTER_DIR.mkdir(parents=True, exist_ok=True)
+        import hashlib
+        tag = hashlib.sha1(url.encode("utf-8")).hexdigest()[:8]   # same title at the same site must not share a file
+        cl_path = COVER_LETTER_DIR / f"{safe_site}_{safe_title}_{tag}_CL.txt"
+        cl_path.write_text(letter, encoding="utf-8")
+        pdf_path = None
+        try:
+            from applypilot.scoring.pdf import convert_to_pdf
+            pdf_path = str(convert_to_pdf(cl_path, lang=lang))
+        except Exception:
+            log.debug("PDF generation failed for %s", cl_path, exc_info=True)
+        conn.execute(
+            "UPDATE jobs SET cover_letter_path=?, cover_letter_at=?, "
+            "cover_attempts=COALESCE(cover_attempts,0)+1 WHERE url=?",
+            (str(cl_path), datetime.now(timezone.utc).isoformat(), url),
+        )
+        conn.commit()
+
+    if pdf_path and dest_dir:
+        name = profile["personal"]["full_name"].replace(" ", "_")
+        dest = _P(dest_dir) / f"{name}_Cover_Letter.pdf"
+        shutil.copy(pdf_path, dest)
+        pdf_path = str(dest)
+    return {"txt": str(cl_path), "pdf": pdf_path, "text": letter, "lang": lang}

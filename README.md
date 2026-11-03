@@ -16,7 +16,7 @@ original README is in [docs/UPSTREAM_README.md](docs/UPSTREAM_README.md).
 ## What it does
 
 ```
-discover ─► enrich ─► score ─► tailor ─► cover ─► pdf ─► apply ─► inbox
+discover ─► enrich ─► score ─► tailor ─► pdf ─► apply (cover letter on demand) ─► inbox
  job boards  full      AI 1-10   CV per    letter   LaTeX   browser   Gmail replies:
  + company   posting   fit vs    job,      per job  1-page  agent     label + notify
  portals     text      your CV   checked                    fills form
@@ -28,7 +28,7 @@ discover ─► enrich ─► score ─► tailor ─► cover ─► pdf ─►
 | **enrich** | Downloads the full description and the real "apply" link of each posting (structured data first, AI extraction as a fallback). | Playwright + LLM |
 | **score** | Rates each posting 1–10 against your base CV. Internships, PhDs, over-senior and off-domain roles are capped. | LLM |
 | **tailor** | Rewrites your CV for each job scoring ≥ `MIN_SCORE`, in the posting's language, then checks it (see *Safety*). | LLM + validators + AI judge |
-| **cover** | Writes a 3-paragraph cover letter in the posting's language, signed with your full name. | LLM |
+| **cover** | On demand only: while applying, the agent runs `applypilot cover-letter --url …` when the form has a cover-letter field or upload. 3 paragraphs in the posting's language, signed with your full name. Not written for forms without such a field. | LLM |
 | **pdf** | Renders the CV with LaTeX (shrinks to stay on one page) and falls back to HTML if LaTeX fails. | pdflatex / Chromium |
 | **apply** | A Claude agent opens the posting in Chrome (your logged-in profile copy), fills every page, uploads CV and letter, answers screening questions from your profile and submits. Skips duplicates of roles already applied to. | Claude Code CLI + Playwright MCP |
 | **inbox** | Reads recent Gmail, classifies job emails (confirmation, rejection, interview, assessment, offer, info request, recruiter), adds `ApplyPilot/…` labels, keeps a list in `responses.md`, and decides what an assistant can do about each one. Notifies you only for things a human must decide. | IMAP + LLM |
@@ -151,7 +151,7 @@ tools as the pipeline: Python, Chromium, Node + Claude Code, optionally LaTeX.
 zsh ~/ApplyPilot/daily_run.sh              # one full round: discover → … → apply (until queue empty)
 
 applypilot run discover                    # or step by step
-applypilot run enrich score tailor cover pdf --min-score 7 --validation strict
+applypilot run enrich score tailor pdf --min-score 7 --validation strict
 applypilot apply --dry-run --limit 1       # watch one form get filled, nothing submitted
 applypilot apply --limit 0 --workers 2 --model sonnet   # 0 = every scored job, then stop
 applypilot apply --continuous              # keep applying as new jobs get tailored
@@ -204,7 +204,7 @@ via Claude Code.
 | enrich (AI fallback only) | ~1 in 5 postings | ~7,700 | ~1,500 *(estimated)* | ~$0.0015 |
 | tailor | ~1.3 per matched job (retries) | ~3,100 (≈1,100 cached) | ~2,450 (1,350) | ~$0.0014 |
 | judge | 1 per tailor attempt | ~2,900 | ~350 (330) | ~$0.00046 |
-| cover letter | 1 per matched job | ~3,200 (≈950 cached) | ~1,550 (1,280) | ~$0.0010 |
+| cover letter | only when a form has a field for one | ~3,200 (≈950 cached) | ~1,550 (1,280) | ~$0.0010 |
 | inbox classify | 1 per job-looking email | ~1,000 | ~150 *(estimated)* | ~$0.0002 |
 
 So: **~$0.00035 to evaluate a posting, ~$0.004 to prepare one application** (CV + judge + letter).

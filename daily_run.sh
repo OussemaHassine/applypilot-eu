@@ -35,7 +35,7 @@ start=$(date +%s)
 {
   echo "===== nightly round $(date '+%F %T') ====="
   echo "--- discover";  "$AP" run discover
-  echo "--- pipeline";  "$AP" run enrich score tailor cover pdf -w 2 --min-score "$MIN_SCORE" --validation strict
+  echo "--- pipeline";  "$AP" run enrich score tailor pdf -w 2 --min-score "$MIN_SCORE" --validation strict
   echo "--- apply";     "$AP" apply --limit "$MAX_APPLY" --min-score "$MIN_SCORE" --workers "$WORKERS" --model "$APPLY_MODEL" $HEADLESS_FLAG
   echo "--- inbox";     "$AP" inbox --days 3 || true
   echo "--- followups"; "$AP" followups --limit 10 --model "$APPLY_MODEL" $HEADLESS_FLAG || true

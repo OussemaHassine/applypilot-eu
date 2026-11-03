@@ -331,8 +331,9 @@ def build_cmd(kind: str) -> tuple[list[str], str]:
         kind = "pipeline"
     table = {
         "discover": (ap + ["run", "discover"], "Discover jobs"),
-        "pipeline": (ap + ["run", "enrich", "score", "tailor", "cover", "pdf", "-w", "2", "--min-score",
-                           s["MIN_SCORE"], "--validation", "strict"], "Score, tailor & cover"),
+        # cover letters are written on demand by the apply agent (only when a form has a field for one)
+        "pipeline": (ap + ["run", "enrich", "score", "tailor", "pdf", "-w", "2", "--min-score",
+                           s["MIN_SCORE"], "--validation", "strict"], "Score & tailor"),
         "apply": (ap + ["apply", "--limit", s["MAX_APPLY"], "--min-score", s["MIN_SCORE"],
                         "--workers", s["WORKERS"], "--model", s["APPLY_MODEL"]], "Apply"),
         "apply-dry": (ap + ["apply", "--dry-run", "--limit", "1", "--model", s["APPLY_MODEL"]], "Dry run (1 job)"),

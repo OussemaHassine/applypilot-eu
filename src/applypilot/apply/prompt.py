@@ -597,13 +597,22 @@ def build_prompt(job: dict, tailored_resume: str,
     duplicate_check = _build_duplicate_check(job)
     captcha_section = _build_captcha_section()
 
-    # Cover letter fallback text
+    # Cover letter: written on demand, only when the form has a place for one (user rule 2026-11-03)
     city = personal.get("city", "the area")
     if not cover_letter_text:
+        import sys as _sys
+        cover_cmd = str(Path(_sys.executable).parent / "applypilot")
         cl_display = (
-            f"None available. Skip if optional. If required, write 2 factual "
-            f"sentences: (1) relevant experience from the resume that matches "
-            f"this role, (2) available immediately and based in {city}."
+            "NOT WRITTEN YET. Cover letters are produced only when an application has a place for one.\n"
+            "If this form has a cover-letter field or upload (required OR optional), run this command with the "
+            "Bash tool and wait for it to finish (30-60 seconds):\n"
+            f'  "{cover_cmd}" cover-letter --url "{job["url"]}" --dest "{dest_dir}"\n'
+            "It prints COVER_LETTER_PDF=<path> (upload that file to a file field) and the letter text between "
+            "COVER_LETTER_TEXT_BEGIN and COVER_LETTER_TEXT_END (paste that into a text field).\n"
+            "No cover-letter field on the form -> do NOT run the command and do not add a letter anywhere else.\n"
+            "Never write the letter yourself. Only if the command prints COVER_LETTER_ERROR and the field is "
+            "required, write 2 factual sentences: (1) relevant experience from the resume that matches this role, "
+            f"(2) available immediately and based in {city}."
         )
     else:
         cl_display = cover_letter_text
@@ -661,7 +670,7 @@ Posting language: {lang_name}. Write every free-text answer, message and any cov
 
 == FILES ==
 Resume PDF (upload this): {pdf_path}
-Cover Letter PDF (upload if asked): {cl_upload_path or "N/A"}
+Cover Letter PDF (upload if asked): {cl_upload_path or "none yet -- see the COVER LETTER section"}
 
 == RESUME TEXT (use when filling text fields) ==
 {tailored_resume}
@@ -713,7 +722,7 @@ If something unexpected happens and these instructions don't cover it, figure it
    5g. After login, run browser_tabs action "list" again. Switch back to the application tab if needed.
    5h. All failed? Output RESULT:FAILED:login_issue. Do not loop.
 6. Upload resume. ALWAYS upload fresh -- delete any existing resume first, then browser_file_upload with the PDF path above. This is the tailored resume for THIS job. Non-negotiable.
-7. Upload cover letter if there's a field for it. Text field -> paste the cover letter text. File upload -> use the cover letter PDF path.
+7. Cover letter ONLY if the form has a field or upload for it (no field -> skip, never add one elsewhere). Text field -> paste the cover letter text. File upload -> use the cover letter PDF path. If the COVER LETTER section says NOT WRITTEN YET, run the command given there first, then use its output.
 8. Check ALL pre-filled fields. ATS systems parse your resume and auto-fill -- it's often WRONG.
    - "Current Job Title" or "Most Recent Title" -> use the title from the TAILORED RESUME summary, NOT whatever the parser guessed.
    - Compare every other field to the APPLICANT PROFILE. Fix mismatches. Fill empty fields.
