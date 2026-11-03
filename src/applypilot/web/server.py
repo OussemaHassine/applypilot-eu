@@ -675,16 +675,76 @@ def worker_tails(max_age: int = 180, lines: int = 8) -> list[dict]:
     return out
 
 
+def _search_count() -> int:
+    """Board searches one discovery run makes: titles x markets, honouring a title's own `markets` list."""
+    try:
+        sc = config.load_search_config()
+        locs = sc.get("locations") or []
+        labels = {l.get("label") for l in locs if isinstance(l, dict)}
+        total = 0
+        for q in sc.get("queries") or []:
+            markets = q.get("markets") if isinstance(q, dict) else None
+            total += len([m for m in markets if m in labels]) if markets else len(locs)
+        return total
+    except Exception:
+        return 0
+
+
+_QUEUE_CACHE: dict = {"at": 0.0, "data": None}
+
+
+def queue_status() -> dict:
+    """What each action would do right now, counted the way the stages select their own work.
+
+    Shown on the Runs page next to every Start button so the user knows whether pressing
+    it does anything. Cached for 3 s because the live view polls every 1.5 s.
+    """
+    if _QUEUE_CACHE["data"] is not None and time.monotonic() - _QUEUE_CACHE["at"] < 3:
+        return _QUEUE_CACHE["data"]
+    from applypilot.pipeline import _count_pending
+    min_score = int(run_settings()["MIN_SCORE"])
+    q: dict = {}
+    for st in ("enrich", "score", "tailor", "pdf"):
+        try:
+            q[st] = _count_pending(st, min_score)
+        except Exception:
+            q[st] = 0
+    q["apply"] = _ready_to_apply()
+    q["parked"] = scalar("SELECT count(*) FROM jobs WHERE apply_status='failed' AND apply_error LIKE 'missing_required%'") or 0
+    q["followups"] = 0
+    if table_exists("email_responses"):
+        cols = {r["name"] for r in rows("PRAGMA table_info(email_responses)")}
+        if "followup_status" in cols:
+            q["followups"] = scalar("SELECT count(*) FROM email_responses WHERE followup_status='pending'") or 0
+    day_ago = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    q["discover"] = {
+        "last_at": scalar("SELECT max(discovered_at) FROM jobs"),
+        "last_24h": scalar("SELECT count(*) FROM jobs WHERE discovered_at > ?", (day_ago,)) or 0,
+        "searches": _search_count(),
+    }
+    ended = [r.ended for r in RUNS.values() if r.kind == "inbox" and r.ended]
+    last_inbox = max(ended) if ended else SCHED_STATE["last_inbox"]
+    q["inbox"] = {"last_at": last_inbox.isoformat(timespec="minutes") if last_inbox else None}
+    _QUEUE_CACHE.update(at=time.monotonic(), data=q)
+    return q
+
+
 def live_status() -> dict:
     running = [r.info(tail=40) for r in RUNS.values() if r.running]
     in_prog = rows("SELECT title, location, agent_id, last_attempted_at FROM jobs WHERE apply_status='in_progress'")
     return {"runs": running, "external": external_processes(), "in_progress": in_prog,
-            "workers": worker_tails(), "next_round": SCHED_STATE["next_round"], "next_inbox": SCHED_STATE["next_inbox"]}
+            "workers": worker_tails(), "next_round": SCHED_STATE["next_round"], "next_inbox": SCHED_STATE["next_inbox"],
+            "queue": queue_status()}
 
 
 @app.get("/api/live")
 def live():
     return live_status()
+
+
+@app.get("/api/queue")
+def queue():
+    return queue_status()
 
 
 # applications -----------------------------------------------------------

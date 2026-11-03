@@ -246,7 +246,11 @@ async function pollSide() {
     else txt = "Idle";
     if (l.in_progress.length) txt += ` · ${l.in_progress.length} applying`;
     const next = l.next_round ? "Next round " + when(l.next_round) : "No round scheduled";
-    mount(el, h("span", { class: "dot" }), h("span", {}, txt, h("br"), h("span", { class: "muted" }, next)));
+    const q = l.queue || {};
+    const pipe = (q.enrich || 0) + (q.score || 0) + (q.tailor || 0) + (q.pdf || 0);
+    const waiting = [pipe ? `${fmtNum(pipe)} to score & tailor` : "", q.apply ? `${fmtNum(q.apply)} to apply` : "", q.followups ? `${q.followups} follow-ups` : ""].filter(Boolean);
+    mount(el, h("span", { class: "dot" }), h("span", {}, txt, h("br"), h("span", { class: "muted" }, next),
+      waiting.length ? [h("br"), h("span", { class: "muted" }, "Waiting: " + waiting.join(" · "))] : null));
   } catch (_) {}
 }
 setInterval(pollSide, 5000);
@@ -517,10 +521,42 @@ routes.runs = async (view) => {
     ["followups", "Email follow-ups", "Click verification links, finish incomplete applications and give consent where an email asks for it."],
   ];
 
+  // what each Start button would do right now (filled from /api/live on every refresh)
+  const qChip = {}, qLine = {}, qBtn = {};
+  const hoursText = (searches) => { const hrs = searches * 26 / 3600; return hrs >= 1 ? `roughly ${hrs.toFixed(1).replace(/\.0$/, "")} h` : `about ${Math.round(hrs * 60)} min`; };
+  function renderQueue(q) {
+    if (!q || !qChip.apply) return;
+    const d = q.discover || {}, ib = q.inbox || {};
+    const pipeParts = [[q.enrich, "to fetch"], [q.score, "to score"], [q.tailor, "to tailor"], [q.pdf, "PDFs to build"]].filter(([n]) => n > 0).map(([n, l]) => `${fmtNum(n)} ${l}`);
+    const pipeTotal = (q.enrich || 0) + (q.score || 0) + (q.tailor || 0) + (q.pdf || 0);
+    const plural = (n, w) => `${fmtNum(n)} ${w}${n === 1 ? "" : "s"}`;
+    const parked = q.parked ? ` ${fmtNum(q.parked)} more ${q.parked === 1 ? "is" : "are"} parked until you add the missing facts (Applications › Needs info).` : "";
+    const set = (k, chip, cls, line, nothing) => {
+      qChip[k].textContent = chip; qChip[k].className = "chip " + cls; qChip[k].style.display = chip ? "" : "none";
+      qLine[k].textContent = line;
+      qBtn[k].textContent = nothing ? "Start anyway" : "Start";
+      qBtn[k].classList.toggle("ghost", !!nothing);
+    };
+    set("discover", d.last_24h ? `${fmtNum(d.last_24h)} new in 24 h` : "ready", d.last_24h ? "info" : "",
+      (d.last_at ? `Last search ${when(d.last_at)}, ${plural(d.last_24h || 0, "new posting")} in the last 24 h. ` : "No search yet. ") + (d.searches ? `Runs ${d.searches} searches, ${hoursText(d.searches)}; postings already known are skipped.` : ""), false);
+    set("pipeline", pipeTotal ? `${fmtNum(pipeTotal)} waiting` : "nothing waiting", pipeTotal ? "good" : "",
+      pipeTotal ? "Waiting now: " + pipeParts.join(" · ") + "." : "Nothing waiting: every posting is fetched, scored and has its CV.", !pipeTotal);
+    set("apply", q.apply ? `${fmtNum(q.apply)} ready` : "nothing ready", q.apply ? "good" : "",
+      (q.apply ? `${plural(q.apply, "job")} with a tailored CV ready to apply.` : "Nothing to apply: every scored job with a CV has been sent.") + parked, !q.apply);
+    set("apply-dry", q.apply ? `${fmtNum(q.apply)} ready` : "nothing ready", q.apply ? "info" : "",
+      q.apply ? "Fills one of the jobs ready to apply, without submitting it." : "No job is ready, so there is nothing to fill.", !q.apply);
+    set("inbox", ib.last_at ? "checked " + when(ib.last_at) : "not checked yet", "",
+      ib.last_at ? `Last check ${when(ib.last_at)}. Reads the last few days of Gmail; already-sorted emails are skipped.` : "No check yet since the app started.", false);
+    set("followups", q.followups ? `${q.followups} waiting` : "nothing waiting", q.followups ? "warn" : "",
+      q.followups ? `${plural(q.followups, "email")} waiting for a click or a reply.` : "Nothing waiting: no email needs an action.", !q.followups);
+    set("round", "", "", `Searches first (${d.searches ? hoursText(d.searches) : "a few hours"}), scores and tailors what is new` + (pipeTotal ? ` plus the ${fmtNum(pipeTotal)} waiting now` : "") + `, then applies to every match` + (q.apply ? ` (${fmtNum(q.apply)} ready already)` : "") + ".", false);
+  }
+
   let liveInProgress = [];
   async function loadRuns() {
     const [r, live] = await Promise.all([api("/api/runs"), api("/api/live")]);
     liveInProgress = live.in_progress || [];
+    renderQueue(live.queue);
     if (!r.workers) r.workers = live.workers || [];
     const cur = r.current.filter((x) => x.running);
     mount(runsEl, 
@@ -571,8 +607,10 @@ routes.runs = async (view) => {
   mount(view, 
     h("div", { class: "head" }, h("div", {}, h("h1", {}, "Runs & schedule"), h("p", { class: "sub" }, "Start any stage by hand, watch it live, or let the scheduler run a full round every day. The scheduler works while this app is running and the Mac is awake."))),
     h("div", { class: "grid g3" }, actions.map(([k, title, desc, primary]) => h("div", { class: "card" },
-      h("h3", {}, title), h("p", { class: "muted small", style: "min-height:40px;margin:0 0 12px" }, desc),
-      h("button", { class: "btn" + (primary ? " primary" : ""), onclick: () => startRun(k) }, "Start")))),
+      h("div", { class: "row", style: "margin-bottom:4px" }, h("h3", { style: "margin:0" }, title), h("span", { class: "spacer" }), qChip[k] = h("span", { class: "chip", style: "display:none" }, "")),
+      h("p", { class: "muted small", style: "min-height:40px;margin:0 0 6px" }, desc),
+      qLine[k] = h("p", { class: "small", style: "min-height:36px;margin:0 0 12px" }, "Counting…"),
+      qBtn[k] = h("button", { class: "btn" + (primary ? " primary" : ""), onclick: () => startRun(k) }, "Start")))),
     h("div", { class: "card section" }, h("div", { class: "row", style: "margin-bottom:8px" }, h("h2", { style: "margin:0" }, "Live"), watchSwitch()), runsEl),
     h("div", { class: "grid g2 section" },
       h("div", { class: "card" }, h("h2", {}, "Daily round"),
