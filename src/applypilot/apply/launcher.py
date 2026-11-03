@@ -245,7 +245,7 @@ def gen_prompt(target_url: str, min_score: int = 7,
     txt_path = Path(resume_path).with_suffix(".txt") if resume_path else None
     resume_text = ""
     if txt_path and txt_path.exists():
-        resume_text = txt_path.read_text(encoding="utf-8")
+        resume_text = txt_path.read_text(encoding="utf-8").replace("**", "")  # bold markers are for the PDF only
 
     prompt = prompt_mod.build_prompt(job=job, tailored_resume=resume_text)
 
@@ -327,7 +327,7 @@ def run_job(job: dict, port: int, worker_id: int = 0,
     txt_path = Path(resume_path).with_suffix(".txt") if resume_path else None
     resume_text = ""
     if txt_path and txt_path.exists():
-        resume_text = txt_path.read_text(encoding="utf-8")
+        resume_text = txt_path.read_text(encoding="utf-8").replace("**", "")  # bold markers are for the PDF only
 
     # Fresh working directory first: Playwright MCP only uploads files from the
     # agent's cwd, so the resume/cover letter PDFs are staged inside it.

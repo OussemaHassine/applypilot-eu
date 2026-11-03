@@ -281,7 +281,7 @@ def run_cover_letters(min_score: int = 7, limit: int = 20,
         try:
             lang = detect_job_language(job)
             if lang not in resume_cache:
-                resume_cache[lang] = load_resume_text(lang)
+                resume_cache[lang] = load_resume_text(lang).replace("**", "")
             letter = generate_cover_letter(resume_cache[lang], job, profile,
                                           validation_mode=validation_mode, lang=lang)
             if not letter.strip():
@@ -385,7 +385,7 @@ def generate_for_job(url: str, validation_mode: str = "strict",
     else:
         if not job.get("full_description"):
             raise ValueError("job has no full description yet (run enrich first)")
-        letter = generate_cover_letter(load_resume_text(lang), job, profile,
+        letter = generate_cover_letter(load_resume_text(lang).replace("**", ""), job, profile,
                                        validation_mode=validation_mode, lang=lang)
         if not letter.strip():
             conn.execute("UPDATE jobs SET cover_attempts=COALESCE(cover_attempts,0)+1 WHERE url=?", (url,))

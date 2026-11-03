@@ -418,6 +418,13 @@ def tailor_resume(
     Returns:
         (tailored_text, report) where report contains validation details.
     """
+    import os as _os
+    if _os.environ.get("APPLYPILOT_TAILOR_MODE", "edit") == "edit":
+        # local patch 2026-11-03: edit the base CV in place (same format, text changed only when needed)
+        from applypilot.scoring.tailor_edit import tailor_resume_edit
+        return tailor_resume_edit(resume_text, job, profile, max_retries=max_retries,
+                                  validation_mode=validation_mode, lang=lang)
+
     job_text = (
         f"TITLE: {job['title']}\n"
         f"COMPANY: {job['site']}\n"

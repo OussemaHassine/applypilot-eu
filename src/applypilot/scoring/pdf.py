@@ -427,7 +427,17 @@ def convert_to_pdf(
 
     out = output_path or text_path.with_suffix(".pdf")
     out = Path(out)
-    if not is_letter(text) and os.environ.get("APPLYPILOT_RESUME_RENDERER", "latex") == "latex":
+    renderer = os.environ.get("APPLYPILOT_RESUME_RENDERER", "charter")
+    if not is_letter(text) and renderer == "charter":
+        # local patch 2026-11-03: the user's own CV look (Charter font); keeps the base-CV text format
+        try:
+            from applypilot.scoring.charter_resume import render_charter_resume
+            if render_charter_resume(text, out):
+                log.info("PDF generated (Charter): %s", out)
+                return out
+        except Exception:
+            log.warning("Charter renderer crashed; falling back", exc_info=True)
+    if not is_letter(text) and renderer in ("latex", "charter"):
         try:
             from applypilot.scoring.latex_resume import render_latex_resume
             titles = SECTION_TITLES.get(lang or DEFAULT_LANG, SECTION_TITLES[DEFAULT_LANG])
