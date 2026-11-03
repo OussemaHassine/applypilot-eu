@@ -249,10 +249,26 @@ _STREAM_POLL_INTERVAL = 10
 
 
 def _count_pending(stage: str, min_score: int = 7) -> int:
-    """Count pending work items for a stage."""
+    """Count pending work items for a stage.
+
+    The count must agree with what the stage's runner will actually process: a count that
+    never reaches zero makes the streaming loop re-run the stage back to back. On 2026-11-03
+    the launchd pipeline spun at 180 % CPU for seven hours (95 MB log) because 1,450 Glassdoor
+    rows are skipped by the scraper and every resume row keeps its .txt path in the DB.
+    """
+    if stage == "pdf":
+        # Same rule as pdf.batch_convert: .txt files in the tailored folder with no .pdf next to them.
+        from applypilot.config import TAILORED_DIR
+        if not TAILORED_DIR.exists():
+            return 0
+        return sum(1 for f in TAILORED_DIR.glob("*.txt")
+                   if not f.name.endswith("_JOB.txt") and not f.with_suffix(".pdf").exists())
     sql = _PENDING_SQL.get(stage)
     if sql is None:
         return 0
+    if stage == "enrich":
+        from applypilot.enrichment.detail import SKIP_DETAIL_SITES
+        sql += "".join(f" AND site != '{site}'" for site in sorted(SKIP_DETAIL_SITES))
     conn = get_connection()
     if "?" in sql:
         return conn.execute(sql, (min_score,)).fetchone()[0]
@@ -310,6 +326,17 @@ def _run_stage_streaming(
             except Exception as e:
                 log.error("Stage '%s' error (pass %d): %s", stage, passes, e)
                 passes += 1
+            # A pass that left the backlog as it was did no work (the runner disagrees with the
+            # pending count, or every item failed). Never re-run immediately: finish the stage if
+            # nothing more can arrive, otherwise wait a poll interval before trying again.
+            left = _count_pending(stage, min_score)
+            if left >= pending:
+                if upstream is None or tracker.is_done(upstream):
+                    log.info("Stage '%s': %d item(s) left that it cannot process now; finishing",
+                             stage, left)
+                    break
+                if stop_event.wait(timeout=_STREAM_POLL_INTERVAL):
+                    break
         else:
             # No work right now
             upstream_done = upstream is None or tracker.is_done(upstream)
