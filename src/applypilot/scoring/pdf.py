@@ -6,6 +6,7 @@ and exports to PDF using headless Chromium via Playwright.
 
 import logging
 import os
+import re
 from pathlib import Path
 
 from applypilot.config import TAILORED_DIR
@@ -335,10 +336,24 @@ li {{
 </html>"""
 
 
+_HEADING_LINE = re.compile(r"^[A-ZÀ-ÝŒ][A-ZÀ-ÝŒ &'’/-]{3,}$")
+
+
 def is_letter(text: str) -> bool:
-    """True when the text is a cover letter rather than a structured resume."""
-    upper_lines = {line.strip().upper() for line in text.splitlines()}
-    return "SUMMARY" not in upper_lines and "TECHNICAL SKILLS" not in upper_lines
+    """True when the text is a cover letter rather than a structured resume.
+
+    A resume has several ALL-CAPS section headings (PROFILE, EXPERIENCE, FORMATION, ...) and
+    "A | B | C" entry lines; the old check only knew the SUMMARY / TECHNICAL SKILLS layout
+    (local patch 2026-11-03: base-format CVs were being rendered as letters).
+    """
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    if lines and lines[0].lower().startswith(("dear", "madame", "monsieur", "bonjour", "gentile", "spett", "egregi")):
+        return True
+    upper = {l.upper() for l in lines}
+    if "SUMMARY" in upper or "TECHNICAL SKILLS" in upper:
+        return False
+    headings = sum(1 for l in lines if len(l) <= 40 and _HEADING_LINE.match(l))
+    return not (headings >= 2 and any(" | " in l for l in lines))
 
 
 def build_letter_html(text: str) -> str:
