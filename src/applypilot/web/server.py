@@ -345,14 +345,27 @@ def build_cmd(kind: str) -> tuple[list[str], str]:
     return table[kind]  # headless is read live from run_settings.env by the apply/followup code
 
 
+# Which runs cannot overlap (local patch 2026-11-03): applying and tailoring use different
+# resources (Claude + browser vs. the OpenAI pipeline) and may run side by side; two browser
+# runs, or two pipeline runs, may not.
+_BROWSER = {"apply", "apply-dry", "followups", "round"}
+_PIPELINE = {"pipeline", "discover", "round"}
+CONFLICTS = {k: (_BROWSER if k in ("apply", "apply-dry", "followups") else _PIPELINE if k in ("pipeline", "discover")
+                 else _BROWSER | _PIPELINE) for k in EXCLUSIVE}
+
+
 def start_run(kind: str, trigger: str = "manual") -> Run:
     with RUNS_LOCK:
         if kind in EXCLUSIVE:
-            busy = [r for r in RUNS.values() if r.running and r.kind in EXCLUSIVE]
+            blockers = CONFLICTS[kind]
+            busy = [r for r in RUNS.values() if r.running and r.kind in blockers]
             if busy:
                 raise HTTPException(409, f"'{busy[0].label}' is already running")
-            if external_processes():
-                raise HTTPException(409, "An ApplyPilot process started outside the UI is running")
+            ext = external_processes()
+            if kind in ("apply", "apply-dry", "followups"):
+                ext = [e for e in ext if "applypilot apply" in e or "daily_run" in e]
+            if ext:
+                raise HTTPException(409, "An ApplyPilot process started outside the UI is running: " + ext[0][:80])
         if kind == "inbox" and any(r.running and r.kind == "inbox" for r in RUNS.values()):
             raise HTTPException(409, "Inbox check already running")
         cmd, label = build_cmd(kind)
