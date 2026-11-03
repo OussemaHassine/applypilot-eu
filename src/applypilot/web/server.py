@@ -428,25 +428,28 @@ def _auto_pipeline(ui: dict, now: datetime) -> None:
     from applypilot.pipeline import _count_pending
     try:
         min_score = int(run_settings()["MIN_SCORE"])
-        waiting = sum(_count_pending(st, min_score) for st in ("enrich", "score", "tailor", "pdf"))
+        # compared stage by stage, not as a sum: a posting moving from "to enrich" to "to score"
+        # keeps the total unchanged, which would look like a stuck backlog
+        counts = tuple(_count_pending(st, min_score) for st in ("enrich", "score", "tailor", "pdf"))
     except Exception:
         return
+    waiting = sum(counts)
     if not waiting:
         return
     last = SCHED_STATE.get("auto_pipeline") or {}
     # the same backlog after a run means those postings cannot be processed right now (a board
     # answering HTTP 429, say): try again in an hour rather than every few minutes
-    wait_min = 60 if last.get("waiting") == waiting else 3
+    wait_min = 60 if last.get("counts") == counts else 3
     if last.get("at") and (now - last["at"]).total_seconds() < wait_min * 60:
         return
     try:
         start_run("pipeline", trigger="auto")
-        SCHED_STATE["auto_pipeline"] = {"at": now, "waiting": waiting}
+        SCHED_STATE["auto_pipeline"] = {"at": now, "counts": counts}
         _sched_event(f"Auto score & tailor started: {waiting} posting(s) waiting")
     except HTTPException as exc:
         if exc.detail != last.get("msg"):
             _sched_event(f"Auto score & tailor waiting: {exc.detail}")
-        SCHED_STATE["auto_pipeline"] = {"at": now, "waiting": waiting, "msg": exc.detail}
+        SCHED_STATE["auto_pipeline"] = {"at": now, "counts": counts, "msg": exc.detail}
 
 
 def _auto_apply(ui: dict, now: datetime) -> None:
