@@ -568,18 +568,28 @@ def overview():
 
 
 def worker_tails(max_age: int = 180, lines: int = 8) -> list[dict]:
-    """Last lines of the apply agents' notes, for workers active in the last few minutes."""
+    """Last lines of the apply agents' notes: every worker that holds a job right now (even when its
+    notes went quiet for a while), plus workers that wrote something in the last few minutes."""
     out = []
     now = time.time()
+    active: dict[str, str] = {}
+    try:
+        with db() as conn:
+            for agent, title in conn.execute(
+                    "SELECT agent_id, title FROM jobs WHERE apply_status='in_progress' AND agent_id IS NOT NULL"):
+                active[agent] = title or ""
+    except Exception:
+        pass
     for log in sorted(LOG_DIR.glob("worker-*.log")):
         try:
-            if now - log.stat().st_mtime > max_age:
+            age = int(now - log.stat().st_mtime)
+            if age > max_age and log.stem not in active:
                 continue
             text = tail_file(log, 60)
         except Exception:
             continue
         keep = [l for l in text.splitlines() if l.strip() and not re.match(r"^\s*>> browser_(snapshot|take_screenshot|wait_for)\s*$", l)]
-        out.append({"worker": log.stem, "lines": keep[-lines:]})
+        out.append({"worker": log.stem, "lines": keep[-lines:], "age": age, "job": active.get(log.stem)})
     return out
 
 

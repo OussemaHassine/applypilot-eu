@@ -479,7 +479,7 @@ function livePanel(run, logText, workers, inProgress) {
       elapsed != null && h("span", { class: "muted small" }, `${elapsed} min`), watchSwitch()),
     info.last && h("div", { class: "small", style: "margin-bottom:8px;color:var(--ink-2)" }, "Latest: ", h("span", { class: "mono" }, info.last.slice(0, 180))),
     inProgress && inProgress.length ? h("div", { class: "small", style: "margin-bottom:8px" }, "Browser agents on: ", inProgress.map((j) => h("span", { class: "chip plain" }, j.title.slice(0, 40)))) : null,
-    workers && workers.length ? h("div", { class: "grid g2", style: "margin-bottom:10px" }, workers.map((w) => h("div", { class: "live-run" }, h("div", { class: "small muted", style: "margin-bottom:4px" }, w.worker.replace("worker-", "Browser agent ")), h("pre", { class: "log", style: "margin:0;max-height:160px;font-size:12px" }, w.lines.join("\n"))))) : null,
+    workers && workers.length ? h("div", { class: "grid g2", style: "margin-bottom:10px" }, workers.map((w) => h("div", { class: "live-run" }, h("div", { class: "small muted", style: "margin-bottom:4px" }, w.worker.replace("worker-", "Browser agent ") + (w.job ? " · " + w.job.slice(0, 48) : "") + (w.age > 90 ? ` · no new note for ${Math.round(w.age / 60)} min` : "")), h("pre", { class: "log", style: "margin:0;max-height:160px;font-size:12px" }, w.lines.join("\n"))))) : null,
     pre);
 }
 
