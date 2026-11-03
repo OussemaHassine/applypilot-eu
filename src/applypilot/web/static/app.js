@@ -308,7 +308,9 @@ routes.overview = async (view) => {
   const render = async () => {
     const o = await api("/api/overview");
     const c = o.counts, r = o.responses.by || {};
-    const actionNeeded = r.info_request || 0, good = (r.interview || 0) + (r.assessment || 0) + (r.offer || 0);
+    const good = (r.interview || 0) + (r.assessment || 0) + (r.offer || 0);
+    // emails only you can answer, as listed in "Needs you" below (handled and automated ones excluded)
+    const actionNeeded = o.todo && o.todo.emails_total != null ? o.todo.emails_total : ((o.todo && o.todo.emails) || []).length;
     const live = o.live;
     const liveCard = (live.runs.length || live.in_progress.length || live.external.length)
       ? h("div", { class: "card section" }, h("h2", {}, "Running now"),
@@ -342,11 +344,11 @@ routes.overview = async (view) => {
         h("div", { class: "row" }, h("a", { class: "btn", href: "#/responses" }, "Responses"), h("button", { class: "btn primary", onclick: () => startRun("round") }, "Run a round now"))),
       h("div", { class: "kpis" },
         h("div", { class: "kpi hero" }, h("div", { class: "l" }, "Applications sent"), h("div", { class: "v" }, fmtNum(c.applied)), h("div", { class: "d" }, `${fmtNum(c.applied_24h)} in the last 24 h`)),
-        h("div", { class: "kpi" }, h("div", { class: "l" }, "Companies that replied"), h("div", { class: "v" }, fmtNum(o.responses.replied_companies || 0)), h("div", { class: "d" }, c.applied ? Math.round(((o.responses.replied_companies || 0) / c.applied) * 100) + "% response rate" : "")),
+        h("div", { class: "kpi" }, h("div", { class: "l" }, "Companies that replied"), h("div", { class: "v" }, fmtNum(o.responses.replied_companies || 0)), h("div", { class: "d" }, (c.applied ? Math.round(((o.responses.replied_companies || 0) / c.applied) * 100) + "% of applications · " : "") + "a person wrote back")),
         h("div", { class: "kpi" }, h("div", { class: "l" }, "Interviews & tests"), h("div", { class: "v" }, fmtNum(good)), h("div", { class: "d" }, `${fmtNum(r.offer || 0)} offers`)),
         h("div", { class: "kpi" }, h("div", { class: "l" }, "Needs your action"), h("div", { class: "v" }, fmtNum(actionNeeded + (c.parked || 0))), h("div", { class: "d" }, `${actionNeeded} emails · ${c.parked || 0} forms`)),
-        h("div", { class: "kpi" }, h("div", { class: "l" }, "Rejections"), h("div", { class: "v" }, fmtNum(r.rejection || 0)), h("div", { class: "d" }, "from email")),
-        h("div", { class: "kpi" }, h("div", { class: "l" }, "Queued"), h("div", { class: "v" }, fmtNum(c.queued)), h("div", { class: "d" }, "CV ready, not sent"))),
+        h("div", { class: "kpi" }, h("div", { class: "l" }, "Rejections"), h("div", { class: "v" }, fmtNum(o.responses.rejected_companies != null ? o.responses.rejected_companies : (r.rejection || 0))), h("div", { class: "d" }, `companies · ${fmtNum(r.rejection || 0)} emails`)),
+        h("div", { class: "kpi" }, h("div", { class: "l" }, "Ready to apply"), h("div", { class: "v" }, fmtNum(c.queued)), h("div", { class: "d" }, "CV ready, not sent yet"))),
       liveCard,
       todoCard,
       autoCard,

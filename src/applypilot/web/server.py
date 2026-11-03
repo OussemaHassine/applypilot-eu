@@ -578,6 +578,7 @@ def overview():
     day_ago = (now - timedelta(days=1)).isoformat()
     j["applied_24h"] = scalar("SELECT count(*) FROM jobs WHERE apply_status='applied' AND applied_at > ?", (day_ago,))
     j["parked"] = scalar("SELECT count(*) FROM jobs WHERE apply_status='failed' AND apply_error LIKE 'missing_required%'")
+    j["queued"] = _ready_to_apply()  # same rule as the Apply button and the launcher (failed jobs with attempts left count)
 
     # applications per day, last 14 days (local dates)
     per_day = Counter()
@@ -598,9 +599,15 @@ def overview():
     if table_exists("email_responses"):
         by = dict((r["category"], r["n"]) for r in rows(
             "SELECT category, count(*) n FROM email_responses WHERE job_related=1 GROUP BY category"))
+        # A reply is a person answering: rejections, interviews, tests, offers, recruiter messages and
+        # questions. Automated "verify your email" / "complete your profile" mails are not replies.
+        human_reply = """job_related=1 AND company != ''
+            AND category IN ('rejection','interview','assessment','offer','recruiter_outreach','info_request')
+            AND coalesce(followup,'human') NOT IN ('verify_link','complete_application','consent','optional')"""
         resp = {"by": by,
-                "replied_companies": scalar("""SELECT count(DISTINCT lower(company)) FROM email_responses WHERE job_related=1
-                    AND category NOT IN ('confirmation','job_alert','other') AND company != ''""") or 0}
+                "replied_companies": scalar(f"SELECT count(DISTINCT lower(company)) FROM email_responses WHERE {human_reply}") or 0,
+                "rejected_companies": scalar("""SELECT count(DISTINCT lower(company)) FROM email_responses
+                    WHERE job_related=1 AND category='rejection' AND company != ''""") or 0}
 
     # activity feed
     events = []
@@ -621,12 +628,15 @@ def overview():
         cols = {r["name"] for r in rows("PRAGMA table_info(email_responses)")}
         has_fu = "followup" in cols
         fu_sel = ", followup, followup_status, followup_note" if has_fu else ", NULL followup, NULL followup_status, NULL followup_note"
-        # for the human: action-needed emails that are not automatable (or where the assistant gave up)
-        todo["emails"] = rows(f"""SELECT message_id, received_at, company, summary, action, subject{fu_sel} FROM email_responses
-            WHERE job_related=1 AND coalesce(handled,0)=0 AND (
+        # for the human: emails only a person can answer (questions, tests, recruiter messages), plus
+        # the ones the follow-up agent tried and gave up on
+        needs_human = """job_related=1 AND coalesce(handled,0)=0 AND (
                   (category='info_request' AND coalesce(followup,'human') NOT IN ('verify_link','complete_application','consent','optional'))
-               OR coalesce(followup_status,'') IN ('needs_human','failed'))
-            ORDER BY received_at DESC LIMIT 12""")
+               OR followup = 'human'
+               OR coalesce(followup_status,'') IN ('needs_human','failed'))"""
+        todo["emails"] = rows(f"""SELECT message_id, received_at, company, summary, action, subject, category{fu_sel}
+            FROM email_responses WHERE {needs_human} ORDER BY received_at DESC LIMIT 12""")
+        todo["emails_total"] = scalar(f"SELECT count(*) FROM email_responses WHERE {needs_human}") or 0
         for e in todo["emails"]:
             e["gmail"] = f"https://mail.google.com/mail/u/0/#search/rfc822msgid%3A{(e['message_id'] or '').strip('<>')}"
         if has_fu:
