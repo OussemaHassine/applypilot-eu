@@ -33,6 +33,7 @@ from applypilot.database import get_connection
 log = logging.getLogger(__name__)
 
 IMAP_HOST = "imap.gmail.com"
+IMAP_TIMEOUT = 90  # seconds per socket operation; Gmail answers in well under that
 LABEL_ROOT = "ApplyPilot"
 
 CATEGORIES = {
@@ -265,8 +266,13 @@ def check_inbox(days: int = 3, label: bool = True, notify_user: bool = True, dry
     _ensure_table(conn)
     seen = {r[0] for r in conn.execute("SELECT message_id FROM email_responses")}
 
-    imap = imaplib.IMAP4_SSL(IMAP_HOST)
-    imap.login(address, password)
+    # Socket timeout: without it a dropped connection (Mac asleep, network change) blocks a read
+    # forever. On 2026-11-03 one check hung 7 h in ssl read and blocked every later Gmail check.
+    try:
+        imap = imaplib.IMAP4_SSL(IMAP_HOST, timeout=IMAP_TIMEOUT)
+        imap.login(address, password)
+    except (OSError, imaplib.IMAP4.error) as exc:
+        raise RuntimeError(f"Gmail IMAP connection failed ({exc.__class__.__name__}: {exc}); will retry on the next check") from exc
     try:
         imap.select("INBOX", readonly=dry_run or not label)
         typ, data = imap.search(None, "X-GM-RAW", f'"newer_than:{int(days)}d -in:chats"')

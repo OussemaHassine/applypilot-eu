@@ -479,11 +479,29 @@ def _auto_apply(ui: dict, now: datetime) -> None:
         SCHED_STATE["auto_apply"] = {"at": now, "ready": ready, "msg": exc.detail}
 
 
+# Runs that must finish quickly: a hang here silently blocks every later check of the same kind
+# (the scheduler never starts a second Gmail check or follow-up run while one is "running").
+RUN_MAX_MINUTES = {"inbox": 30, "followups": 180}
+
+
+def _watchdog(now: datetime) -> None:
+    """Stop runs that exceeded their time budget, so the scheduler can start fresh ones."""
+    for run in list(RUNS.values()):
+        limit = RUN_MAX_MINUTES.get(run.kind)
+        if not limit or not run.running:
+            continue
+        minutes = (now - run.started).total_seconds() / 60
+        if minutes > limit:
+            _sched_event(f"{run.label} stopped after {int(minutes)} min without finishing (limit {limit} min)")
+            threading.Thread(target=run.stop, daemon=True).start()
+
+
 def scheduler_loop() -> None:
     while True:
         try:
             ui = load_ui()
             now = datetime.now()
+            _watchdog(now)
             nxt = next_round_time(ui, now)
             SCHED_STATE["next_round"] = nxt.isoformat(timespec="minutes") if nxt else None
             if nxt and nxt <= now:
@@ -1194,7 +1212,7 @@ def test_gmail():
         return {"ok": False, "error": "Gmail address or app password not set"}
     try:
         socket.setdefaulttimeout(12)
-        im = imaplib.IMAP4_SSL("imap.gmail.com")
+        im = imaplib.IMAP4_SSL("imap.gmail.com", timeout=30)
         im.login(address, password)
         typ, data = im.select("INBOX", readonly=True)
         im.logout()
