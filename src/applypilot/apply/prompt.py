@@ -244,7 +244,9 @@ def _build_hard_rules(profile: dict) -> str:
 2. {work_auth_rule}
    If a required question forces a permit/status choice: follow the profile's permit_choice_rule — choose the general 'valid residence/work permit' option (e.g. 'residence permit allowing work', 'temporary residence permit', 'work permit', 'other valid permit'). NEVER claim EU/EEA citizenship or an EU Blue Card. Only if no such option exists, output RESULT:FAILED:missing_required_work_permit_detail.
 3. {name_rule}
-4. Numbers in screening answers (years with a tool, team sizes, salaries) must come from the profile or be derived from dates in the resume. Say so when you derive one. Never estimate beyond what the resume supports."""
+4. Numbers in screening answers (years with a tool, team sizes, salaries) must come from the profile or be derived from dates in the resume. Say so when you derive one. Never estimate beyond what the resume supports.
+5. Opt-ins: never follow or subscribe. On LinkedIn Easy Apply, UNTICK "Follow <company> to stay up to date with their page" before clicking Submit (it is ticked by default on the review step). Untick any pre-ticked follow, newsletter, marketing, job-alert or "share my profile with other recruiters" box. Only consent boxes that are required to submit the application stay ticked.
+"""
 
 
 def _build_captcha_section() -> str:
@@ -657,7 +659,7 @@ def build_prompt(job: dict, tailored_resume: str,
     if dry_run:
         submit_instruction = "IMPORTANT: Do NOT click the final Submit/Apply button. Review the form, verify all fields, then output RESULT:APPLIED with a note that this was a dry run."
     else:
-        submit_instruction = "BEFORE clicking Submit/Apply, take a snapshot and review EVERY field on the page. Verify all data matches the APPLICANT PROFILE and TAILORED RESUME -- name, email, phone, location, work auth, resume uploaded, cover letter if applicable. If anything is wrong or missing, fix it FIRST. Only click Submit after confirming everything is correct."
+        submit_instruction = "BEFORE clicking Submit/Apply, take a snapshot and review EVERY field on the page. Untick \"Follow <company>\" and any other follow/newsletter/marketing box. Verify all data matches the APPLICANT PROFILE and TAILORED RESUME -- name, email, phone, location, work auth, resume uploaded, cover letter if applicable. If anything is wrong or missing, fix it FIRST. Only click Submit after confirming everything is correct."
 
     prompt = f"""You are an autonomous job application agent. Your ONE mission: get this candidate an interview. You have all the information and tools. Think strategically. Act decisively. Submit the application.
 
