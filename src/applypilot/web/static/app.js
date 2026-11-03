@@ -26,7 +26,20 @@ const svg = (tag, attrs = {}) => {
   return el;
 };
 // replaceChildren() renders null as the text "null"; mount() drops null/false children first.
-function mount(el, ...kids) { el.replaceChildren(...kids.flat(Infinity).filter((k) => k != null && k !== false)); }
+function mount(el, ...kids) {
+  // live pages re-render every 1.5 s: keep the page where the user scrolled to
+  const y = window.scrollY;
+  el.replaceChildren(...kids.flat(Infinity).filter((k) => k != null && k !== false));
+  if (window.scrollY !== y) window.scrollTo(0, y);
+  requestAnimationFrame(() => { if (window.scrollY !== y) window.scrollTo(0, y); });
+}
+// log boxes: follow the end unless the user scrolled up inside them
+const SCROLL_MEMO = new Map();
+function keepScroll(pre, key) {
+  pre.addEventListener("scroll", () => SCROLL_MEMO.set(key, { top: pre.scrollTop, atBottom: pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 12 }));
+  requestAnimationFrame(() => { const m = SCROLL_MEMO.get(key); pre.scrollTop = (!m || m.atBottom) ? pre.scrollHeight : m.top; });
+  return pre;
+}
 async function api(path, opts = {}) {
   const res = await fetch(path, {
     method: opts.method || "GET",
@@ -75,7 +88,7 @@ function stickyDetails(key, summary, body) {
 function watchSwitch() {
   const cb = h("input", { type: "checkbox", class: "switch", onchange: (e) => setWatch(e.target.checked) });
   cb.checked = WATCH === true;
-  return h("label", { class: "check small", style: "margin-left:auto;white-space:nowrap",
+  return h("label", { class: "check small", style: "white-space:nowrap",
     title: "On: every job opens a visible Chrome window you can watch. Off: browsers run headless, nothing pops up. Takes effect at the next job; windows already open are hidden right away." },
     cb, "Watch browsers");
 }
@@ -295,7 +308,7 @@ routes.overview = async (view) => {
     const liveCard = (live.runs.length || live.in_progress.length || live.external.length)
       ? h("div", { class: "card section" }, h("h2", {}, "Running now"),
           h("div", { class: "live" },
-            live.runs.map((run) => h("div", { class: "live-run" }, h("div", { class: "row", style: "margin-bottom:6px" }, h("span", { class: "spacer" }), h("a", { class: "btn sm", href: "#/runs" }, "Open full view")), livePanel(run, run.log, live.workers, live.in_progress))),
+            live.runs.map((run) => h("div", { class: "live-run" }, h("div", { class: "row", style: "margin-bottom:6px" }, watchSwitch(), h("span", { class: "spacer" }), h("a", { class: "btn sm", href: "#/runs" }, "Open full view")), livePanel(run, run.log, live.workers, live.in_progress))),
             live.external.map((x) => h("div", { class: "live-run small" }, "Started outside the UI: ", h("span", { class: "mono" }, x))),
             live.in_progress.length ? h("div", { class: "small" }, "Applying to: ", live.in_progress.map((j) => j.title).join(" · ")) : null))
       : null;
@@ -469,17 +482,17 @@ function livePanel(run, logText, workers, inProgress) {
   const started = run ? new Date(run.started) : null;
   const elapsed = started ? Math.round((Date.now() - started.getTime()) / 60000) : null;
   const pre = h("pre", { class: "log tall", style: "max-height:420px" }, (logText || "Starting…").split("\n").filter((l) => !NOISE_RE.test(l)).join("\n"));
-  requestAnimationFrame(() => { pre.scrollTop = pre.scrollHeight; });
+  keepScroll(pre, "runlog:" + (run ? run.id : "none"));
   return h("div", {},
     h("div", { class: "row", style: "margin-bottom:8px;gap:12px" },
       h("span", { class: "chip info" }, "Running"),
       run && h("strong", {}, run.label),
       info.stage && h("span", { class: "chip plain" }, "Stage: " + (STAGE_NAMES[info.stage] || info.stage)),
       info.progress && h("span", { class: "muted small num" }, `${info.progress.done} / ${info.progress.total}`),
-      elapsed != null && h("span", { class: "muted small" }, `${elapsed} min`), watchSwitch()),
+      elapsed != null && h("span", { class: "muted small" }, `${elapsed} min`)),
     info.last && h("div", { class: "small", style: "margin-bottom:8px;color:var(--ink-2)" }, "Latest: ", h("span", { class: "mono" }, info.last.slice(0, 180))),
     inProgress && inProgress.length ? h("div", { class: "small", style: "margin-bottom:8px" }, "Browser agents on: ", inProgress.map((j) => h("span", { class: "chip plain" }, j.title.slice(0, 40)))) : null,
-    workers && workers.length ? h("div", { class: "grid g2", style: "margin-bottom:10px" }, workers.map((w) => h("div", { class: "live-run" }, h("div", { class: "small muted", style: "margin-bottom:4px" }, w.worker.replace("worker-", "Browser agent ") + (w.job ? " · " + w.job.slice(0, 48) : "") + (w.age > 90 ? ` · no new note for ${Math.round(w.age / 60)} min` : "")), h("pre", { class: "log", style: "margin:0;max-height:160px;font-size:12px" }, w.lines.join("\n"))))) : null,
+    workers && workers.length ? h("div", { class: "grid g2", style: "margin-bottom:10px" }, workers.map((w) => h("div", { class: "live-run" }, h("div", { class: "small muted", style: "margin-bottom:4px" }, w.worker.replace("worker-", "Browser agent ") + (w.job ? " · " + w.job.slice(0, 48) : "") + (w.age > 90 ? ` · no new note for ${Math.round(w.age / 60)} min` : "")), keepScroll(h("pre", { class: "log", style: "margin:0;max-height:160px;font-size:12px" }, w.lines.join("\n")), "worker:" + w.worker)))) : null,
     pre);
 }
 
