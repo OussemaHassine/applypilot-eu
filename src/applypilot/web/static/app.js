@@ -78,6 +78,7 @@ async function setWatch(on) {
   } catch (e) { toast(e.message, true); }
 }
 const OPEN_DETAILS = new Set();
+const OPEN_LOGS = new Map();   // finished-run id -> log text shown under its row
 function stickyDetails(key, summary, body) {
   // the Runs page re-renders every 1.5 s; remember which <details> the user opened
   const d = h("details", {}, h("summary", {}, summary), body);
@@ -533,10 +534,17 @@ routes.runs = async (view) => {
       !cur.length && r.nightly_log ? stickyDetails("nightly-log", "Today's round log", h("pre", { class: "log tall" }, r.nightly_log)) : null);
     const finished = [...r.current.filter((x) => !x.running), ...r.history].slice(0, 15);
     mount(histEl, finished.length ? h("table", {}, h("thead", {}, h("tr", {}, h("th", {}, "Started"), h("th", {}, "Run"), h("th", {}, "How"), h("th", {}, "Result"), h("th", {}, ""))),
-      h("tbody", {}, finished.map((x) => h("tr", {},
+      h("tbody", {}, finished.map((x) => [h("tr", {},
         h("td", { class: "small" }, when(x.started)), h("td", {}, x.label), h("td", { class: "small muted" }, x.trigger),
         h("td", {}, x.rc === 0 ? h("span", { class: "chip good" }, "Done") : h("span", { class: "chip bad" }, x.rc == null ? "Unknown" : "Exit " + x.rc)),
-        h("td", { class: "num" }, h("button", { class: "btn sm ghost", onclick: async () => { const l = await api(`/api/runs/${x.id}/log`); histEl.append(h("pre", { class: "log tall" }, l.log)); } }, "Log"))))))
+        h("td", { class: "num" }, h("button", { class: "btn sm ghost", onclick: async () => {
+          // the table is re-rendered every 1.5 s, so the open log lives in OPEN_LOGS and is drawn as a row
+          if (OPEN_LOGS.has(x.id)) { OPEN_LOGS.delete(x.id); loadRuns(); return; }
+          OPEN_LOGS.set(x.id, null);
+          try { OPEN_LOGS.set(x.id, (await api(`/api/runs/${x.id}/log`)).log || "(empty log)"); } catch (e) { OPEN_LOGS.set(x.id, "Log not available: " + e.message); }
+          loadRuns();
+        } }, OPEN_LOGS.has(x.id) ? "Hide" : "Log"))),
+        OPEN_LOGS.has(x.id) ? h("tr", {}, h("td", { colspan: 5, style: "padding:0 0 10px" }, keepScroll(h("pre", { class: "log tall", style: "margin:0" }, OPEN_LOGS.get(x.id) || "Loading…"), "histlog:" + x.id))) : null])))
       : h("p", { class: "muted" }, "No runs yet in this session."));
     nextEl.textContent = (r.scheduler.next_round ? "Next scheduled round: " + when(r.scheduler.next_round) : "No round scheduled") +
       (r.scheduler.next_inbox ? " · next Gmail check " + when(r.scheduler.next_inbox) : "");
