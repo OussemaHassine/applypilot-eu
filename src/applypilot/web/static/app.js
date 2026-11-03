@@ -552,13 +552,14 @@ routes.runs = async (view) => {
 
   const enabled = h("input", { type: "checkbox", class: "switch", checked: s.enabled });
   const autoApply = h("input", { type: "checkbox", class: "switch", checked: s.auto_apply !== false });
+  const autoPipe = h("input", { type: "checkbox", class: "switch", checked: s.auto_pipeline !== false });
   const timeIn = h("input", { type: "time", value: s.time, style: "max-width:130px" });
   const dayBoxes = DAY_NAMES.map((n, i) => h("label", {}, h("input", { type: "checkbox", value: i, checked: s.days.includes(i) }), h("span", {}, n)));
   const ibEnabled = h("input", { type: "checkbox", class: "switch", checked: ib.enabled });
   const ibInterval = h("input", { type: "number", min: 2, max: 240, value: ib.interval_min, style: "max-width:90px" });
   async function saveSchedule() {
     try {
-      const body = { schedule: { enabled: enabled.checked, time: timeIn.value, days: dayBoxes.map((l) => $("input", l)).filter((x) => x.checked).map((x) => +x.value), auto_apply: autoApply.checked },
+      const body = { schedule: { enabled: enabled.checked, time: timeIn.value, days: dayBoxes.map((l) => $("input", l)).filter((x) => x.checked).map((x) => +x.value), auto_apply: autoApply.checked, auto_pipeline: autoPipe.checked },
         inbox: { enabled: ibEnabled.checked, interval_min: +ibInterval.value || 10 } };
       await api("/api/schedule", { method: "PUT", body });
       toast("Schedule saved");
@@ -578,6 +579,8 @@ routes.runs = async (view) => {
         h("label", { class: "check", style: "margin-bottom:14px" }, enabled, "Run a full round automatically"),
         h("div", { class: "row", style: "margin-bottom:12px" }, h("span", { class: "small muted", style: "width:50px" }, "At"), timeIn),
         h("div", { class: "days", style: "margin-bottom:14px" }, dayBoxes),
+        h("label", { class: "check", style: "margin-bottom:6px" }, autoPipe, "Score and tailor new postings as soon as they arrive"),
+        h("p", { class: "muted small", style: "margin:0 0 10px" }, "Starts a Score & tailor run whenever postings wait to be fetched, scored or tailored; postings a board throttled are retried hourly."),
         h("label", { class: "check", style: "margin-bottom:6px" }, autoApply, "Apply as soon as tailored CVs are ready, any time of day"),
         h("p", { class: "muted small", style: "margin:0 0 14px" }, "Starts an Apply run whenever scored jobs with a CV are waiting (browsers follow the Watch switch above)."),
         h("button", { class: "btn primary", onclick: saveSchedule }, "Save schedule"), nextEl),

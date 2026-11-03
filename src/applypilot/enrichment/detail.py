@@ -545,6 +545,15 @@ def scrape_detail_page(page, url: str) -> dict:
             result["error"] = f"HTTP {resp.status}"
             result["elapsed"] = time.time() - t0
             return result
+        if resp and resp.status in RETRYABLE_STATUSES:
+            # The site is throttling or failing (LinkedIn answers guests with HTTP 429 after a
+            # burst; 2026-11-03 it cost 409 postings). The page it serves holds no posting, so
+            # spend no LLM call on it and leave the job pending for a later run instead of
+            # marking it "no data extracted".
+            result["status"] = "retry"
+            result["error"] = f"HTTP {resp.status}"
+            result["elapsed"] = time.time() - t0
+            return result
         page.wait_for_load_state("domcontentloaded", timeout=15000)
         try:
             page.wait_for_load_state("networkidle", timeout=10000)
@@ -639,6 +648,7 @@ def scrape_site_batch(
             browser = p.chromium.launch(**launch_opts)
             context = browser.new_context(user_agent=UA)
             page = context.new_page()
+            retries_in_a_row = 0
 
             for i, (url, title) in enumerate(jobs):
                 log.info("[%d/%d] %s", i + 1, len(jobs), title[:50] if title else url[:50])
@@ -660,6 +670,18 @@ def scrape_site_batch(
 
                 log.info("  %s | %s | desc=%s chars | apply=%s | %.1fs%s",
                          status, tier_str, f"{desc_len:,}", apply_str, elapsed, err_str)
+
+                if status == "retry":
+                    # not written to the DB: the job stays pending for the next run
+                    stats["retry"] = stats.get("retry", 0) + 1
+                    retries_in_a_row += 1
+                    if retries_in_a_row >= 3:
+                        log.warning("%s keeps answering %s: leaving the remaining %d job(s) for a later run",
+                                    site, result.get("error"), len(jobs) - i - 1)
+                        break
+                    time.sleep(max(delay, 30.0) * retries_in_a_row)
+                    continue
+                retries_in_a_row = 0
 
                 if status in ("ok", "partial"):
                     stats[status] += 1

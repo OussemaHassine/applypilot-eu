@@ -43,7 +43,7 @@ RUN_DIR = LOG_DIR / "ui-runs"
 LANGS = ("en", "fr", "it")
 
 DEFAULT_UI = {
-    "schedule": {"enabled": False, "time": "00:00", "days": [0, 1, 2, 3, 4, 5, 6], "auto_apply": True},
+    "schedule": {"enabled": False, "time": "00:00", "days": [0, 1, 2, 3, 4, 5, 6], "auto_apply": True, "auto_pipeline": True},
     "inbox": {"enabled": False, "interval_min": 10, "days": 3},
     "prices": {  # USD per 1M tokens
         "llm_input": 0.10, "llm_cached_input": 0.01, "llm_output": 0.50,
@@ -417,6 +417,38 @@ def _ready_to_apply() -> int:
                   (int(s["MIN_SCORE"]), config.DEFAULTS["max_apply_attempts"])) or 0
 
 
+def _auto_pipeline(ui: dict, now: datetime) -> None:
+    """Start a Score & tailor run whenever postings wait to be enriched, scored or tailored, so new
+    discoveries, and postings a board throttled earlier (left pending), are handled without waiting
+    for the nightly round."""
+    if not ui["schedule"].get("auto_pipeline", True):
+        return
+    if any(r.running and r.kind in CONFLICTS["pipeline"] for r in RUNS.values()):
+        return
+    from applypilot.pipeline import _count_pending
+    try:
+        min_score = int(run_settings()["MIN_SCORE"])
+        waiting = sum(_count_pending(st, min_score) for st in ("enrich", "score", "tailor", "pdf"))
+    except Exception:
+        return
+    if not waiting:
+        return
+    last = SCHED_STATE.get("auto_pipeline") or {}
+    # the same backlog after a run means those postings cannot be processed right now (a board
+    # answering HTTP 429, say): try again in an hour rather than every few minutes
+    wait_min = 60 if last.get("waiting") == waiting else 3
+    if last.get("at") and (now - last["at"]).total_seconds() < wait_min * 60:
+        return
+    try:
+        start_run("pipeline", trigger="auto")
+        SCHED_STATE["auto_pipeline"] = {"at": now, "waiting": waiting}
+        _sched_event(f"Auto score & tailor started: {waiting} posting(s) waiting")
+    except HTTPException as exc:
+        if exc.detail != last.get("msg"):
+            _sched_event(f"Auto score & tailor waiting: {exc.detail}")
+        SCHED_STATE["auto_pipeline"] = {"at": now, "waiting": waiting, "msg": exc.detail}
+
+
 def _auto_apply(ui: dict, now: datetime) -> None:
     """Start an Apply run whenever tailored jobs are waiting, so applying never waits for the
     nightly round (user, 2026-11-03). Replaces the launchd continuous apply, which the UI could
@@ -459,6 +491,7 @@ def scheduler_loop() -> None:
                     _sched_event(f"Scheduled round skipped: {exc.detail}")
                 ui["last_round_date"] = now.date().isoformat()
                 save_ui(ui)
+            _auto_pipeline(ui, now)
             _auto_apply(ui, now)
             ib = ui["inbox"]
             if ib.get("enabled"):
@@ -821,7 +854,7 @@ def schedule_put(data: dict = Body(...)):
     sch, ib = data.get("schedule", {}), data.get("inbox", {})
     if "time" in sch and not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", sch["time"]):
         raise HTTPException(400, "time must be HH:MM")
-    ui["schedule"].update({k: v for k, v in sch.items() if k in ("enabled", "time", "days", "auto_apply")})
+    ui["schedule"].update({k: v for k, v in sch.items() if k in ("enabled", "time", "days", "auto_apply", "auto_pipeline")})
     ui["inbox"].update({k: v for k, v in ib.items() if k in ("enabled", "interval_min", "days")})
     save_ui(ui)
     nxt = next_round_time(ui)
