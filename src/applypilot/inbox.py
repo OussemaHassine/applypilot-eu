@@ -251,9 +251,43 @@ def notify(title: str, message: str, sound: bool = True) -> None:
 
 # ── main entry ───────────────────────────────────────────────────────────
 
+def _connect(address: str, password: str, readonly: bool) -> imaplib.IMAP4_SSL:
+    """Open a Gmail IMAP session on INBOX; RuntimeError with a readable message on failure."""
+    # Socket timeout: without it a dropped connection (Mac asleep, network change) blocks a read
+    # forever. On 2026-11-03 one check hung 7 h in ssl read and blocked every later Gmail check.
+    try:
+        imap = imaplib.IMAP4_SSL(IMAP_HOST, timeout=IMAP_TIMEOUT)
+        imap.login(address, password)
+        imap.select("INBOX", readonly=readonly)
+    except (OSError, imaplib.IMAP4.error) as exc:
+        raise RuntimeError(f"Gmail IMAP connection failed ({exc.__class__.__name__}: {exc}); "
+                           "will retry on the next check") from exc
+    return imap
+
+
+_UID_RE = re.compile(rb"UID (\d+)")
+
+
+def _fetch_by_uid(imap: imaplib.IMAP4_SSL, uids: list[bytes], what: str) -> dict[bytes, bytes]:
+    """One UID FETCH for many messages -> {uid: payload}. One round trip instead of one per message."""
+    out: dict[bytes, bytes] = {}
+    if not uids:
+        return out
+    typ, data = imap.uid("fetch", b",".join(uids).decode(), what)
+    if typ != "OK" or not data:
+        return out
+    for part in data:
+        if isinstance(part, tuple) and len(part) >= 2 and isinstance(part[1], bytes):
+            m = _UID_RE.search(part[0])
+            if m:
+                out[m.group(1)] = part[1]
+    return out
+
+
 def check_inbox(days: int = 3, label: bool = True, notify_user: bool = True, dry_run: bool = False,
                 max_messages: int = 300) -> list[dict]:
     """Process Gmail messages from the last `days` days. Returns the newly classified job emails."""
+    import time as _time
     address = os.environ.get("GMAIL_ADDRESS", "").strip()
     password = os.environ.get("GMAIL_APP_PASSWORD", "").replace(" ", "").strip()
     if not address or not password:
@@ -266,25 +300,26 @@ def check_inbox(days: int = 3, label: bool = True, notify_user: bool = True, dry
     _ensure_table(conn)
     seen = {r[0] for r in conn.execute("SELECT message_id FROM email_responses")}
 
-    # Socket timeout: without it a dropped connection (Mac asleep, network change) blocks a read
-    # forever. On 2026-11-03 one check hung 7 h in ssl read and blocked every later Gmail check.
+    readonly = dry_run or not label
+    t0 = _time.monotonic()
+    session = {"imap": _connect(address, password, readonly), "labels": label and not dry_run}
     try:
-        imap = imaplib.IMAP4_SSL(IMAP_HOST, timeout=IMAP_TIMEOUT)
-        imap.login(address, password)
-    except (OSError, imaplib.IMAP4.error) as exc:
-        raise RuntimeError(f"Gmail IMAP connection failed ({exc.__class__.__name__}: {exc}); will retry on the next check") from exc
-    try:
-        imap.select("INBOX", readonly=dry_run or not label)
-        typ, data = imap.search(None, "X-GM-RAW", f'"newer_than:{int(days)}d -in:chats"')
-        ids = (data[0].split() if typ == "OK" and data and data[0] else [])[-max_messages:]
-        # 1) fetch candidates (IMAP is sequential), 2) classify in parallel, 3) label/notify/store
-        candidates: list[tuple[bytes, dict, str]] = []
-        for num in reversed(ids):  # newest first
-            typ, hdr = imap.fetch(num, "(BODY.PEEK[HEADER.FIELDS (MESSAGE-ID FROM SUBJECT DATE)])")
-            if typ != "OK" or not hdr or not isinstance(hdr[0], tuple):
+        imap = session["imap"]
+        typ, data = imap.uid("search", None, "X-GM-RAW", f'"newer_than:{int(days)}d -in:chats"')
+        uids = (data[0].split() if typ == "OK" and data and data[0] else [])[-max_messages:]
+
+        # 1) one FETCH for every header, 2) full bodies for the unseen messages only, in chunks,
+        # 3) classify in parallel, 4) label / notify / store.
+        # Steps 1-2 used to be one round trip per message (300+ per hourly check): on a slow link
+        # that took 16 min (2026-11-05 11:57) and the session died before anything was saved.
+        headers = _fetch_by_uid(imap, uids, "(BODY.PEEK[HEADER.FIELDS (MESSAGE-ID FROM SUBJECT DATE)])")
+        fresh: list[tuple[bytes, dict]] = []
+        for uid in reversed(uids):  # newest first
+            raw = headers.get(uid)
+            if raw is None:
                 continue
-            h = email.message_from_bytes(hdr[0][1])
-            mid = (h.get("Message-ID") or f"imap-{num.decode()}").strip()
+            h = email.message_from_bytes(raw)
+            mid = (h.get("Message-ID") or f"imap-{uid.decode()}").strip()
             if mid in seen:
                 continue
             sender, subject, date_raw = _decode(h.get("From")), _decode(h.get("Subject")), h.get("Date", "")
@@ -292,20 +327,28 @@ def check_inbox(days: int = 3, label: bool = True, notify_user: bool = True, dry
                 received = parsedate_to_datetime(date_raw).astimezone(timezone.utc).isoformat(timespec="minutes")
             except Exception:
                 received = date_raw
-            typ, full = imap.fetch(num, "(BODY.PEEK[]<0.120000>)")  # PEEK: never marks as read
-            parsed = email.message_from_bytes(full[0][1]) if typ == "OK" and full and isinstance(full[0], tuple) else None
+            fresh.append((uid, {"message_id": mid, "received_at": received, "sender": sender, "subject": subject,
+                               "job_related": 0, "category": None, "company": "", "role": "", "summary": "",
+                               "action": "", "job_url": None, "notified": 0, "followup": None,
+                               "followup_link": None, "followup_status": None, "followup_note": None,
+                               "handled": 0, "_links": []}))
+        bodies: dict[bytes, bytes] = {}
+        for i in range(0, len(fresh), 20):
+            chunk = [uid for uid, _ in fresh[i:i + 20]]
+            bodies.update(_fetch_by_uid(imap, chunk, "(BODY.PEEK[]<0.120000>)"))  # PEEK: never marks as read
+        candidates: list[tuple[bytes, dict, str]] = []
+        for uid, row in fresh:
+            parsed = email.message_from_bytes(bodies[uid]) if bodies.get(uid) else None
             body = _body_text(parsed) if parsed else ""
-            links = _extract_links(parsed, body) if parsed else []
-            row = {"message_id": mid, "received_at": received, "sender": sender, "subject": subject,
-                   "job_related": 0, "category": None, "company": "", "role": "", "summary": "",
-                   "action": "", "job_url": None, "notified": 0, "followup": None, "followup_link": None,
-                   "followup_status": None, "followup_note": None, "handled": 0, "_links": links}
-            candidates.append((num, row, body))
+            row["_links"] = _extract_links(parsed, body) if parsed else []
+            candidates.append((uid, row, body))
+        log.info("Gmail: %d messages in the last %dd, %d not seen before, fetched in %.1fs",
+                 len(uids), days, len(candidates), _time.monotonic() - t0)
 
         from concurrent.futures import ThreadPoolExecutor
 
         def work(item):
-            num, row, body = item
+            uid, row, body = item
             if not _looks_job_related(row["sender"], row["subject"], body):
                 return item, None
             try:
@@ -317,8 +360,36 @@ def check_inbox(days: int = 3, label: bool = True, notify_user: bool = True, dry
         with ThreadPoolExecutor(max_workers=8) as pool:
             results = list(pool.map(work, candidates))
 
+        def label_msg(uid: bytes, lbl: str) -> None:
+            """Add the Gmail label; reconnect once if the session died meanwhile.
+
+            Gmail drops a session left idle while the LLM classifies (nightly round 2026-11-05:
+            "FETCH => socket error: EOF"). Labels are cosmetic: the DB row below is what counts,
+            so a label failure never aborts the run."""
+            if not session["labels"]:
+                return
+            for attempt in (1, 2):
+                try:
+                    session["imap"].uid("store", uid.decode(), "+X-GM-LABELS", f'("{LABEL_ROOT}/{lbl}")')
+                    return
+                except (OSError, imaplib.IMAP4.error) as exc:
+                    if attempt == 2:
+                        log.warning("Gmail label skipped for %r: %s", uid, exc)
+                        return
+                    log.warning("Gmail session lost while labelling (%s); reconnecting", exc.__class__.__name__)
+                    try:
+                        session["imap"].logout()
+                    except Exception:
+                        pass
+                    try:
+                        session["imap"] = _connect(address, password, readonly)
+                    except RuntimeError as exc2:
+                        log.warning("%s; labels skipped for the rest of this run", exc2)
+                        session["labels"] = False
+                        return
+
         new: list[dict] = []
-        for (num, row, _body), c in results:
+        for (uid, row, _body), c in results:
             if c == "error":
                 continue  # retry next time
             if c:
@@ -336,8 +407,8 @@ def check_inbox(days: int = 3, label: bool = True, notify_user: bool = True, dry
                         row["followup_status"] = "skipped"
                         row["followup_note"] = "Optional; nothing required, skipped automatically."
                     lbl, should_notify, title = CATEGORIES[row["category"]]
-                    if label and lbl and not dry_run:
-                        imap.store(num, "+X-GM-LABELS", f'("{LABEL_ROOT}/{lbl}")')
+                    if lbl:
+                        label_msg(uid, lbl)
                     # only disturb the user for things an assistant cannot do
                     if should_notify and notify_user and not dry_run and row["followup"] in ("human", "none"):
                         who = row["company"] or parseaddr(row["sender"])[0] or parseaddr(row["sender"])[1]
@@ -358,7 +429,7 @@ def check_inbox(days: int = 3, label: bool = True, notify_user: bool = True, dry
         return new
     finally:
         try:
-            imap.logout()
+            session["imap"].logout()
         except Exception:
             pass
         if not dry_run:

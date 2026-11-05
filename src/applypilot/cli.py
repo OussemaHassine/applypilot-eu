@@ -278,16 +278,16 @@ def inbox(
         console.print(open(path, encoding="utf-8").read())
         return
 
-    def once() -> None:
+    def once() -> bool:
         try:
             new = check_inbox(days=days, label=not no_label, notify_user=not no_notify, dry_run=dry_run)
         except Exception as exc:
             console.print(f"[red]Inbox check failed:[/red] {exc}")
-            return
+            return False
         stamp = time.strftime("%H:%M")
         if not new:
             console.print(f"[dim]{stamp} no new job emails[/dim]")
-            return
+            return True
         t = Table(title=f"{stamp} new job emails")
         for col in ("Category", "Company", "Summary", "To do"):
             t.add_column(col, overflow="fold")
@@ -297,11 +297,14 @@ def inbox(
         console.print(t)
         if not dry_run:
             console.print("[dim]All responses: ~/ApplyPilot/responses.md[/dim]")
+        return True
 
-    once()
+    ok = once()
     while watch:
         time.sleep(max(1, interval) * 60)
         once()
+    if not ok:
+        raise typer.Exit(code=1)   # a failed check must not show as "Done" in the UI
 
 
 @app.command()

@@ -341,6 +341,41 @@ def search_jobs(
 
 # -- Full crawl (all queries x all locations) --------------------------------
 
+NETWORK_PROBES = (("www.linkedin.com", 443), ("apis.indeed.com", 443), ("www.google.com", 443))
+NETWORK_WAIT_MAX = 15 * 60   # seconds
+
+
+def _network_up(timeout: float = 5.0) -> bool:
+    """True when at least one job board answers a TCP connect (covers DNS and Wi-Fi outages)."""
+    import socket
+    for host, port in NETWORK_PROBES:
+        try:
+            socket.create_connection((host, port), timeout=timeout).close()
+            return True
+        except OSError:
+            continue
+    return False
+
+
+def _wait_for_network(max_wait: int = NETWORK_WAIT_MAX) -> bool:
+    """Block until the internet is reachable; False after max_wait.
+
+    The scheduled round of 2026-11-05 00:00 ran all 361 searches in one minute with
+    NameResolutionError on every one (the Mac had just woken up and Wi-Fi was not back yet)
+    and reported "0 new postings" as if that were a result."""
+    waited = 0
+    while not _network_up():
+        if waited >= max_wait:
+            return False
+        if waited == 0:
+            log.warning("No internet connection (job boards unreachable); waiting up to %d min", max_wait // 60)
+        time.sleep(30)
+        waited += 30
+    if waited:
+        log.info("Internet connection is back after %d s", waited)
+    return True
+
+
 def _full_crawl(
     search_cfg: dict,
     tiers: list[int] | None = None,
@@ -396,8 +431,17 @@ def _full_crawl(
     total_existing = 0
     total_errors = 0
     completed = 0
+    empty_streak = 0   # consecutive searches with no result at all: the sign of a dead connection
+
+    if not _wait_for_network():
+        raise RuntimeError(f"no internet connection for {NETWORK_WAIT_MAX // 60} min; discovery aborted")
 
     for s in searches:
+        if empty_streak >= 5 and not _network_up():
+            if not _wait_for_network():
+                raise RuntimeError(f"internet connection lost for {NETWORK_WAIT_MAX // 60} min after "
+                                   f"{completed}/{len(searches)} searches; discovery aborted")
+            empty_streak = 0
         result = _run_one_search(
             s, sites, results_per_site, hours_old,
             proxy_config, defaults, max_retries,
@@ -407,6 +451,7 @@ def _full_crawl(
         total_new += result["new"]
         total_existing += result["existing"]
         total_errors += result["errors"]
+        empty_streak = empty_streak + 1 if result["total"] == 0 else 0
 
         if completed % 5 == 0 or completed == len(searches):
             log.info("Progress: %d/%d queries done (%d new, %d dupes, %d errors)",
