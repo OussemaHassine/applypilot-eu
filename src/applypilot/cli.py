@@ -324,6 +324,28 @@ def inbox(
 
 
 @app.command()
+def pause(target: str = typer.Argument("all", help="discover | pipeline | apply | followups | round | all")) -> None:
+    """Pause a stage: the job in hand finishes, then the run waits where it is until `resume`."""
+    from applypilot import pause as gate
+    try:
+        groups = gate.pause(target)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc))
+    console.print("Paused: " + ", ".join(gate.LABELS[g] for g in groups) + f"  (applypilot resume {target} to continue)")
+
+
+@app.command()
+def resume(target: str = typer.Argument("all", help="discover | pipeline | apply | followups | round | all")) -> None:
+    """Resume paused stages; runs waiting at the gate continue where they stopped."""
+    from applypilot import pause as gate
+    try:
+        groups = gate.resume(target)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc))
+    console.print("Resumed: " + ", ".join(gate.LABELS[g] for g in groups))
+
+
+@app.command()
 def alerts(
     days: int = typer.Option(7, "--days", "-d", help="How many days of alert emails to read."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be added without saving."),

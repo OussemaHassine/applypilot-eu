@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 
 from jobspy import scrape_jobs
 
-from applypilot import config
+from applypilot import config, pause
 from applypilot.database import get_connection, init_db, store_jobs
 
 log = logging.getLogger(__name__)
@@ -437,6 +437,7 @@ def _full_crawl(
         raise RuntimeError(f"no internet connection for {NETWORK_WAIT_MAX // 60} min; discovery aborted")
 
     for s in searches:
+        pause.wait_if_paused("discover")
         if empty_streak >= 5 and not _network_up():
             if not _wait_for_network():
                 raise RuntimeError(f"internet connection lost for {NETWORK_WAIT_MAX // 60} min after "

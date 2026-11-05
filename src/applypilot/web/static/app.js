@@ -116,6 +116,9 @@ function roundText(sch, prefix) {
   if (new Date(sch.next_round) > Date.now()) return prefix + when(sch.next_round);
   return sch.round_blocked ? "Round due, waiting: " + sch.round_blocked : "Round due, starting now";
 }
+// Pause groups behind each run kind (mirrors PAUSE_GROUPS in server.py).
+const GROUPS_OF = { round: ["discover", "pipeline", "apply"], discover: ["discover"], pipeline: ["pipeline"], apply: ["apply"], "apply-dry": ["apply"], followups: ["followups"] };
+const heldGroups = (paused, kind) => (GROUPS_OF[kind] || []).filter((g) => paused && paused[g] && paused[g].on);
 const human = (k) => k.replace(/^_+/, "").replace(/_/g, " ").replace(/\b\w/, (c) => c.toUpperCase());
 
 const ERR_LABEL = {
@@ -247,10 +250,12 @@ async function pollSide() {
     const el = $("#side-status");
     const running = l.runs.length || l.external.length || l.in_progress.length;
     el.classList.toggle("running", !!running);
+    const paused = l.paused || {};
+    const pausedNames = Object.values(paused).filter((p) => p.on).map((p) => p.label);
     let txt;
-    if (l.runs.length) txt = "Running: " + l.runs.map((r) => r.label).join(", ");
+    if (l.runs.length) txt = (l.runs.every((r) => heldGroups(paused, r.kind).length) ? "Paused: " : "Running: ") + l.runs.map((r) => r.label).join(", ");
     else if (l.external.length) txt = "Outside the UI: " + l.external.map((x) => x.replace(/^applypilot /, "").split(" ").slice(0, 2).join(" ")).join(", ");
-    else txt = "Idle";
+    else txt = pausedNames.length ? "Idle · paused: " + pausedNames.join(", ") : "Idle";
     if (l.in_progress.length) txt += ` · ${l.in_progress.length} applying`;
     const next = roundText(l, "Next round ");
     const q = l.queue || {};
@@ -569,7 +574,7 @@ function parseLive(logText) {
   }
   return { stage, progress, last: last ? last.replace(/^\d\d:\d\d:\d\d - \w+ - /, "") : "" };
 }
-function livePanel(run, logText, workers, inProgress) {
+function livePanel(run, logText, workers, inProgress, pausedText) {
   const info = parseLive(logText);
   const started = run ? new Date(run.started) : null;
   const elapsed = started ? Math.round((Date.now() - started.getTime()) / 60000) : null;
@@ -577,8 +582,9 @@ function livePanel(run, logText, workers, inProgress) {
   keepScroll(pre, "runlog:" + (run ? run.id : "none"));
   return h("div", {},
     h("div", { class: "row", style: "margin-bottom:8px;gap:12px" },
-      h("span", { class: "chip info" }, "Running"),
+      pausedText ? h("span", { class: "chip warn" }, "Paused") : h("span", { class: "chip info" }, "Running"),
       run && h("strong", {}, run.label),
+      pausedText && h("span", { class: "muted small" }, pausedText),
       info.stage && h("span", { class: "chip plain" }, "Stage: " + (STAGE_NAMES[info.stage] || info.stage)),
       info.progress && h("span", { class: "muted small num" }, `${info.progress.done} / ${info.progress.total}`),
       elapsed != null && h("span", { class: "muted small" }, `${elapsed} min`)),
@@ -609,7 +615,8 @@ routes.runs = async (view) => {
   ];
 
   // what each Start button would do right now (filled from /api/live on every refresh)
-  const qChip = {}, qLine = {}, qBtn = {};
+  const qChip = {}, qLine = {}, qBtn = {}, qPause = {};
+  let pausedState = {};
   const hoursText = (searches) => { const hrs = searches * 26 / 3600; return hrs >= 1 ? `roughly ${hrs.toFixed(1).replace(/\.0$/, "")} h` : `about ${Math.round(hrs * 60)} min`; };
   function renderQueue(q) {
     if (!q || !qChip.apply) return;
@@ -637,13 +644,31 @@ routes.runs = async (view) => {
     set("followups", q.followups ? `${q.followups} waiting` : "nothing waiting", q.followups ? "warn" : "",
       q.followups ? `${plural(q.followups, "email")} waiting for a click or a reply.` : "Nothing waiting: no email needs an action.", !q.followups);
     set("round", "", "", `Searches first (${d.searches ? hoursText(d.searches) : "a few hours"}), scores and tailors what is new` + (pipeTotal ? ` plus the ${fmtNum(pipeTotal)} waiting now` : "") + `, then applies to every match` + (q.apply ? ` (${fmtNum(q.apply)} ready already)` : "") + ".", false);
+    // Pause / Resume per card: a paused group hides Start and says what is waiting at the gate
+    for (const k of Object.keys(qBtn)) {
+      const gs = GROUPS_OF[k] || [], held = heldGroups(pausedState, k);
+      const waiting = gs.reduce((n, g) => n + ((pausedState[g] || {}).waiting || 0), 0);
+      if (qPause[k]) { qPause[k].textContent = held.length ? "Resume" : "Pause"; qPause[k].className = "btn sm " + (held.length ? "primary" : "ghost"); }
+      qBtn[k].style.display = held.length ? "none" : "";
+      if (!held.length) continue;
+      qChip[k].textContent = "paused"; qChip[k].className = "chip warn"; qChip[k].style.display = "";
+      const finishing = gs.includes("apply") && liveInProgress.length ? ` ${liveInProgress.length} application(s) in hand finish first.` : "";
+      qLine[k].textContent = (waiting ? "Paused: a run is waiting at the gate and continues where it stopped when you press Resume." : "Paused: nothing starts until you press Resume.")
+        + finishing + (k === "round" && held.length < gs.length ? ` (${held.map((g) => pausedState[g].label).join(", ")} paused.)` : "");
+    }
   }
 
   let liveInProgress = [];
   async function loadRuns() {
     const [r, live] = await Promise.all([api("/api/runs"), api("/api/live")]);
     liveInProgress = live.in_progress || [];
+    pausedState = live.paused || {};
     renderQueue(live.queue);
+    const pausedText = (kind) => {
+      const held = heldGroups(pausedState, kind);
+      if (!held.length) return null;
+      return liveInProgress.length && held.includes("apply") ? `${liveInProgress.length} application(s) in hand finish, then it waits for Resume` : "waiting for Resume; continues where it stopped";
+    };
     if (!r.workers) r.workers = live.workers || [];
     const cur = r.current.filter((x) => x.running);
     mount(runsEl, 
@@ -652,7 +677,7 @@ routes.runs = async (view) => {
       cur.length ? cur.map((x) => h("div", { class: "live-run", style: "margin-bottom:12px" },
         h("div", { class: "row", style: "margin-bottom:8px" }, h("span", { class: "muted small" }, (x.trigger === "schedule" ? "scheduled · " : "") + "started " + when(x.started)),
           h("span", { class: "spacer" }), h("button", { class: "btn sm danger", onclick: async () => { await api(`/api/runs/${x.id}/stop`, { method: "POST" }); toast("Stopping…"); } }, "Stop")),
-        livePanel(x, x.kind === "round" && (x.log || "").split("\n").length < 5 ? (x.log || "") + "\n" + (r.nightly_log || "") : x.log, r.workers, liveInProgress)))
+        livePanel(x, x.kind === "round" && (x.log || "").split("\n").length < 5 ? (x.log || "") + "\n" + (r.nightly_log || "") : x.log, r.workers, liveInProgress, pausedText(x.kind))))
         : h("p", { class: "muted" }, "Nothing running."),
       !cur.length && r.nightly_log ? stickyDetails("nightly-log", "Today's round log", h("pre", { class: "log tall" }, r.nightly_log)) : null);
     const finished = [...r.current.filter((x) => !x.running), ...r.history].slice(0, 15);
@@ -680,6 +705,15 @@ routes.runs = async (view) => {
   const dayBoxes = DAY_NAMES.map((n, i) => h("label", {}, h("input", { type: "checkbox", value: i, checked: s.days.includes(i) }), h("span", {}, n)));
   const ibEnabled = h("input", { type: "checkbox", class: "switch", checked: ib.enabled });
   const ibInterval = h("input", { type: "number", min: 2, max: 240, value: ib.interval_min, style: "max-width:90px" });
+  async function togglePause(k) {
+    const held = heldGroups(pausedState, k).length;
+    try {
+      await api((held ? "/api/resume/" : "/api/pause/") + k, { method: "POST" });
+      toast(held ? "Resumed" : "Paused: the job in hand finishes, then it waits");
+      await loadRuns();
+      pollSide();
+    } catch (e) { toast(e.message, true); }
+  }
   async function saveSchedule() {
     try {
       const body = { schedule: { enabled: enabled.checked, time: timeIn.value, days: dayBoxes.map((l) => $("input", l)).filter((x) => x.checked).map((x) => +x.value), auto_apply: autoApply.checked, auto_pipeline: autoPipe.checked },
@@ -697,7 +731,8 @@ routes.runs = async (view) => {
       h("div", { class: "row", style: "margin-bottom:4px" }, h("h3", { style: "margin:0" }, title), h("span", { class: "spacer" }), qChip[k] = h("span", { class: "chip", style: "display:none" }, "")),
       h("p", { class: "muted small", style: "min-height:40px;margin:0 0 6px" }, desc),
       qLine[k] = h("p", { class: "small", style: "min-height:36px;margin:0 0 12px" }, "Counting…"),
-      qBtn[k] = h("button", { class: "btn" + (primary ? " primary" : ""), onclick: () => startRun(k) }, "Start")))),
+      h("div", { class: "row", style: "gap:8px" }, qBtn[k] = h("button", { class: "btn" + (primary ? " primary" : ""), onclick: () => startRun(k) }, "Start"),
+        GROUPS_OF[k] && k !== "apply-dry" ? (qPause[k] = h("button", { class: "btn sm ghost", onclick: () => togglePause(k) }, "Pause")) : null)))),
     h("div", { class: "card section" }, h("div", { class: "row", style: "margin-bottom:8px" }, h("h2", { style: "margin:0" }, "Live"), watchSwitch()), runsEl),
     h("div", { class: "grid g2 section" },
       h("div", { class: "card" }, h("h2", {}, "Daily round"),

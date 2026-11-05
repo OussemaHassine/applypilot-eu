@@ -117,7 +117,7 @@ applypilot ui            # http://127.0.0.1:8765, opens your browser
 | **Postings** | Every posting the searches found, with its fit score and the AI's reason: totals, a clickable score histogram, filters by stage, score, board and country, search, paging and CSV export. |
 | **Applications** | Every job by state (sent, ready, needs info, not sent, all matches) with search and country filter. A row opens the tailored CV and cover letter (PDF), why it matched, the employer's emails and the agent's step-by-step notes from the form. |
 | **Responses** | Company replies from Gmail sorted into action needed, interview, test, offer, recruiter, rejection; one click to open the email. |
-| **Runs & schedule** | Start a full round or any single stage, watch the live log, stop it. Daily schedule (time + weekdays) and the Gmail watcher interval. |
+| **Runs & schedule** | Start a full round or any single stage, watch the live log, stop it, or pause it: the job in hand finishes, the run waits where it is, and Resume continues from the next job (nothing is redone). Daily schedule (time + weekdays) and the Gmail watcher interval. |
 | **Profile** | Every fact employers are told, as a form: identity, address per country, work rights, salary rules, languages, extra facts, allowed skills. Raw JSON editor for anything else. |
 | **Job search** | Job titles and tiers, markets, freshness, boards, accepted and rejected places. Raw YAML editor too. |
 | **Base CVs** | Edit the EN / FR / IT source CVs and preview them as PDF. |

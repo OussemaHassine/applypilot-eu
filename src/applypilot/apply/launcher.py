@@ -23,7 +23,7 @@ from pathlib import Path
 from rich.console import Console
 from rich.live import Live
 
-from applypilot import config
+from applypilot import config, pause
 from applypilot.database import get_connection
 from applypilot.apply import chrome, dashboard, prompt as prompt_mod
 from applypilot.apply.chrome import (
@@ -627,6 +627,14 @@ def worker_loop(worker_id: int = 0, limit: int = 1,
 
     while not _stop_event.is_set():
         if not continuous and not unlimited and jobs_done >= limit:
+            break
+
+        def _paused() -> None:   # Pause pressed: the job in hand finished, nothing new until Resume
+            add_event(f"[W{worker_id}] Paused: waiting for Resume")
+            update_state(worker_id, status="paused", job_title="", company="",
+                         last_action="paused, waiting for Resume", actions=0)
+        if pause.wait_if_paused("apply", stop_event=_stop_event, on_pause=_paused,
+                                on_resume=lambda: add_event(f"[W{worker_id}] Resumed")) and _stop_event.is_set():
             break
 
         update_state(worker_id, status="idle", job_title="", company="",

@@ -20,7 +20,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from applypilot import config
+from applypilot import config, pause
 from applypilot.apply import prompt as prompt_mod
 from applypilot.apply.chrome import cleanup_worker, launch_chrome, reset_worker_dir
 from applypilot.apply.launcher import BASE_CDP_PORT, _CLI_PAUSE_MARKERS, _make_mcp_config
@@ -172,6 +172,7 @@ def run_followups(limit: int = 10, headless: bool | None = None, model: str = "s
     port = BASE_CDP_PORT + WORKER_ID
     log_path = config.LOG_DIR / "followups.log"
     for row in pending:
+        pause.wait_if_paused("followups")
         job = _job_for(row)
         worker_dir = reset_worker_dir(WORKER_ID)
         prompt = _build_prompt(row, job, profile, worker_dir)

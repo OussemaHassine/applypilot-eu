@@ -22,7 +22,7 @@ from urllib.parse import urljoin
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
 
-from applypilot import config
+from applypilot import config, pause
 from applypilot.config import DB_PATH
 from applypilot.database import get_connection, init_db, ensure_columns
 from applypilot.llm import get_client
@@ -651,6 +651,7 @@ def scrape_site_batch(
             retries_in_a_row = 0
 
             for i, (url, title) in enumerate(jobs):
+                pause.wait_if_paused("pipeline")
                 log.info("[%d/%d] %s", i + 1, len(jobs), title[:50] if title else url[:50])
 
                 result = scrape_detail_page(page, url)

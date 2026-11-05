@@ -11,6 +11,7 @@ import re
 import time
 from datetime import datetime, timezone
 
+from applypilot import pause
 from applypilot.config import RESUME_PATH, load_profile
 from applypilot.database import get_connection, get_jobs_by_stage
 from applypilot.llm import get_client
@@ -141,6 +142,7 @@ def run_scoring(limit: int = 0, rescore: bool = False) -> dict:
     results: list[dict] = []
 
     for job in jobs:
+        pause.wait_if_paused("pipeline")
         result = score_job(resume_text, job)
         result["url"] = job["url"]
         completed += 1

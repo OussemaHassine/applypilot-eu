@@ -16,6 +16,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from applypilot import pause
 from applypilot.config import TAILORED_DIR, load_profile, load_resume_text
 from applypilot.location import localize_resume_header, resolve_candidate_location
 from applypilot.database import get_connection, get_jobs_by_stage
@@ -574,6 +575,7 @@ def run_tailoring(min_score: int = 7, limit: int = 20,
     stats: dict[str, int] = {"approved": 0, "failed_validation": 0, "failed_judge": 0, "error": 0}
 
     for job in jobs:
+        pause.wait_if_paused("pipeline")
         completed += 1
         try:
             lang = detect_job_language(job)

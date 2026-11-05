@@ -29,7 +29,7 @@ from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from applypilot import config
+from applypilot import config, pause
 
 APP_DIR: Path = config.APP_DIR
 DB_PATH: Path = config.DB_PATH
@@ -233,6 +233,7 @@ class Run:
         self.started = datetime.now()
         self.ended: datetime | None = None
         self.rc: int | None = None
+        self.paused_s = 0   # seconds spent paused, left out of the watchdog's budget
         RUN_DIR.mkdir(parents=True, exist_ok=True)
         self.log = RUN_DIR / f"{self.id}-{kind}.log"
         self.proc: subprocess.Popen | None = None
@@ -364,8 +365,21 @@ _EXTERNAL_BLOCKERS = {
 }
 
 
+# The pause groups a run kind works through (a round runs all three stages).
+PAUSE_GROUPS = {"round": pause.TARGETS["round"], "discover": ("discover",), "pipeline": ("pipeline",),
+                "apply": ("apply",), "apply-dry": ("apply",), "followups": ("followups",)}
+
+
+def pause_state() -> dict:
+    w = pause.waiting()
+    return {g: {"on": pause.is_paused(g), "waiting": w[g], "label": pause.LABELS[g]} for g in pause.GROUPS}
+
+
 def start_run(kind: str, trigger: str = "manual") -> Run:
     with RUNS_LOCK:
+        held = [g for g in PAUSE_GROUPS.get(kind, ()) if pause.is_paused(g)]
+        if held:
+            raise HTTPException(409, f"{pause.LABELS[held[0]]} is paused; press Resume first")
         if kind in EXCLUSIVE:
             blockers = CONFLICTS[kind]
             busy = [r for r in RUNS.values() if r.running and r.kind in blockers]
@@ -430,7 +444,7 @@ def _auto_pipeline(ui: dict, now: datetime) -> None:
     """Start a Score & tailor run whenever postings wait to be enriched, scored or tailored, so new
     discoveries, and postings a board throttled earlier (left pending), are handled without waiting
     for the nightly round."""
-    if not ui["schedule"].get("auto_pipeline", True):
+    if not ui["schedule"].get("auto_pipeline", True) or pause.is_paused("pipeline"):
         return
     if any(r.running and r.kind in CONFLICTS["pipeline"] for r in RUNS.values()):
         return
@@ -465,7 +479,7 @@ def _auto_apply(ui: dict, now: datetime) -> None:
     """Start an Apply run whenever tailored jobs are waiting, so applying never waits for the
     nightly round (user, 2026-11-03). Replaces the launchd continuous apply, which the UI could
     neither see nor control. MAX_APPLY=0 makes each run take everything ready, then stop."""
-    if not ui["schedule"].get("auto_apply", True):
+    if not ui["schedule"].get("auto_apply", True) or pause.is_paused("apply"):
         return
     if any(r.running and r.kind in CONFLICTS["apply"] for r in RUNS.values()):
         return
@@ -499,7 +513,10 @@ def _watchdog(now: datetime) -> None:
         limit = RUN_MAX_MINUTES.get(run.kind)
         if not limit or not run.running:
             continue
-        minutes = (now - run.started).total_seconds() / 60
+        if any(pause.is_paused(g) for g in PAUSE_GROUPS.get(run.kind, ())):
+            run.paused_s += 20   # the budget clock stands still while the run is paused
+            continue
+        minutes = ((now - run.started).total_seconds() - run.paused_s) / 60
         if minutes > limit:
             _sched_event(f"{run.label} stopped after {int(minutes)} min without finishing (limit {limit} min)")
             threading.Thread(target=run.stop, daemon=True).start()
@@ -784,7 +801,7 @@ def live_status() -> dict:
     in_prog = rows("SELECT title, location, agent_id, last_attempted_at FROM jobs WHERE apply_status='in_progress'")
     return {"runs": running, "external": external_processes(), "in_progress": in_prog,
             "workers": worker_tails(), "next_round": SCHED_STATE["next_round"], "round_blocked": SCHED_STATE["round_blocked"], "next_inbox": SCHED_STATE["next_inbox"],
-            "queue": queue_status()}
+            "queue": queue_status(), "paused": pause_state()}
 
 
 @app.get("/api/live")
@@ -1033,6 +1050,35 @@ def runs_stop(run_id: str):
         raise HTTPException(404)
     threading.Thread(target=run.stop, daemon=True).start()
     return {"stopping": run_id}
+
+
+@app.post("/api/pause/{target}")
+def pause_set(target: str):
+    """Pause a stage group ("round" = discover + pipeline + apply): the job in hand finishes, then
+    every run of that group waits where it is, and nothing new starts, until /api/resume."""
+    try:
+        groups = pause.pause(target)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    names = ", ".join(pause.LABELS[g] for g in groups)
+    alive = [r.label for r in RUNS.values() if r.running and set(PAUSE_GROUPS.get(r.kind, ())) & set(groups)]
+    _sched_event(f"Paused {names}" + (f": {', '.join(alive)} finishes the job in hand, then waits" if alive
+                                      else "; nothing starts until Resume"))
+    return pause_state()
+
+
+@app.post("/api/resume/{target}")
+def pause_clear(target: str):
+    try:
+        groups = pause.resume(target)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    # let the auto starters and the daily slot look again on the next tick instead of waiting out their back-off
+    SCHED_STATE["auto_pipeline"] = None
+    SCHED_STATE["auto_apply"] = None
+    SCHED_STATE["round_blocked"] = None
+    _sched_event("Resumed " + ", ".join(pause.LABELS[g] for g in groups))
+    return pause_state()
 
 
 @app.get("/api/runs/{run_id}/log")

@@ -19,7 +19,7 @@ from html.parser import HTMLParser
 
 import yaml
 
-from applypilot import config
+from applypilot import config, pause
 from applypilot.config import CONFIG_DIR
 from applypilot.database import get_connection, init_db
 
@@ -334,6 +334,7 @@ def _process_one(
     reject_locs: list[str],
 ) -> dict:
     """Search one employer, fetch details, store results."""
+    pause.wait_if_paused("discover")
     emp = employers[employer_key]
 
     try:

@@ -9,6 +9,7 @@ import os
 import re
 from pathlib import Path
 
+from applypilot import pause
 from applypilot.config import TAILORED_DIR
 from applypilot.lang import DEFAULT_LANG, SECTION_TITLES, detect_text_language
 
@@ -541,6 +542,7 @@ def batch_convert(limit: int = 50) -> int:
     log.info("Converting %d files to PDF...", len(to_convert))
     converted = 0
     for f in to_convert:
+        pause.wait_if_paused("pipeline")
         try:
             convert_to_pdf(f)
             converted += 1
