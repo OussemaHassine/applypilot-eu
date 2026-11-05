@@ -125,7 +125,10 @@ applypilot ui            # http://127.0.0.1:8765, opens your browser
 | **Costs** | Measured token usage and cost per stage and per day, form-filling cost per attempt. |
 
 The scheduler lives inside the app: it runs while `applypilot ui` is running and the machine is
-awake. Every save keeps the previous file in `~/ApplyPilot/backups/`.
+awake. A daily slot the machine slept through is not lost: the round starts as soon as the
+scheduler is back (once per day), and waits if an apply or follow-up run is still going. Saving
+a changed schedule starts it from its next slot. Every save keeps the previous file in
+`~/ApplyPilot/backups/`.
 
 ### Deploying
 

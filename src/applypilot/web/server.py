@@ -385,7 +385,7 @@ def start_run(kind: str, trigger: str = "manual") -> Run:
 
 # ── scheduler ────────────────────────────────────────────────────────────
 
-SCHED_STATE = {"last_inbox": None, "next_round": None, "next_inbox": None, "events": []}
+SCHED_STATE = {"last_inbox": None, "next_round": None, "next_inbox": None, "round_blocked": None, "events": []}
 
 
 def _sched_event(msg: str) -> None:
@@ -394,18 +394,27 @@ def _sched_event(msg: str) -> None:
 
 
 def next_round_time(ui: dict, now: datetime | None = None) -> datetime | None:
+    """The slot the scheduler should start next, or None when the schedule is off.
+
+    Today's slot stays due until a scheduled round has started today (`last_round_date`),
+    even when it is hours in the past: the Mac was asleep or the app was not running at the
+    time, and the round catches up as soon as the scheduler sees it (a MacBook that sleeps at
+    midnight would otherwise skip every day). Saving the schedule waives a slot that is
+    already past (see schedule_put), so changing the time in the afternoon never starts a
+    round on the spot.
+    """
     sch = ui["schedule"]
     if not sch.get("enabled") or not sch.get("days"):
         return None
     now = now or datetime.now()
     hh, mm = (int(x) for x in sch.get("time", "00:00").split(":"))
     for add in range(0, 8):
-        day = now + timedelta(days=add)
-        cand = day.replace(hour=hh, minute=mm, second=0, microsecond=0)
-        if cand.weekday() in sch["days"] and cand > now - timedelta(minutes=1):
-            if add == 0 and ui.get("last_round_date") == cand.date().isoformat():
-                continue
-            return cand
+        cand = (now + timedelta(days=add)).replace(hour=hh, minute=mm, second=0, microsecond=0)
+        if cand.weekday() not in sch["days"]:
+            continue
+        if add == 0 and ui.get("last_round_date") == cand.date().isoformat():
+            continue    # today's round already started, or today's slot was waived
+        return cand
     return None
 
 
@@ -505,13 +514,26 @@ def scheduler_loop() -> None:
             nxt = next_round_time(ui, now)
             SCHED_STATE["next_round"] = nxt.isoformat(timespec="minutes") if nxt else None
             if nxt and nxt <= now:
+                late = now - nxt
                 try:
                     start_run("round", trigger="schedule")
-                    _sched_event("Scheduled round started")
+                    _sched_event("Scheduled round started" if late < timedelta(minutes=2) else
+                                 f"Missed {nxt:%H:%M} round started {late.seconds // 3600}h{late.seconds % 3600 // 60:02d} late "
+                                 "(the Mac was asleep or the app was not running)")
+                    SCHED_STATE["round_blocked"] = None
+                    ui["last_round_date"] = now.date().isoformat()
+                    save_ui(ui)
                 except HTTPException as exc:
-                    _sched_event(f"Scheduled round skipped: {exc.detail}")
-                ui["last_round_date"] = now.date().isoformat()
-                save_ui(ui)
+                    if any(r.running and r.kind == "round" for r in RUNS.values()):
+                        # a round started by hand counts as today's round
+                        _sched_event(f"Scheduled round skipped: {exc.detail}")
+                        ui["last_round_date"] = now.date().isoformat()
+                        save_ui(ui)
+                    elif SCHED_STATE["round_blocked"] != exc.detail:
+                        # anything else (apply, follow-ups, a CLI run) ends on its own: keep the slot due,
+                        # retry every tick, and tell the user once per blocker rather than every 20 s
+                        SCHED_STATE["round_blocked"] = exc.detail
+                        _sched_event(f"Scheduled round waiting: {exc.detail}")
             _auto_pipeline(ui, now)
             _auto_apply(ui, now)
             ib = ui["inbox"]
@@ -761,7 +783,7 @@ def live_status() -> dict:
     running = [r.info(tail=40) for r in RUNS.values() if r.running]
     in_prog = rows("SELECT title, location, agent_id, last_attempted_at FROM jobs WHERE apply_status='in_progress'")
     return {"runs": running, "external": external_processes(), "in_progress": in_prog,
-            "workers": worker_tails(), "next_round": SCHED_STATE["next_round"], "next_inbox": SCHED_STATE["next_inbox"],
+            "workers": worker_tails(), "next_round": SCHED_STATE["next_round"], "round_blocked": SCHED_STATE["round_blocked"], "next_inbox": SCHED_STATE["next_inbox"],
             "queue": queue_status()}
 
 
@@ -1035,12 +1057,19 @@ def schedule_put(data: dict = Body(...)):
     sch, ib = data.get("schedule", {}), data.get("inbox", {})
     if "time" in sch and not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", sch["time"]):
         raise HTTPException(400, "time must be HH:MM")
+    slot_before = {k: ui["schedule"].get(k) for k in ("enabled", "time", "days")}
     ui["schedule"].update({k: v for k, v in sch.items() if k in ("enabled", "time", "days", "auto_apply", "auto_pipeline")})
     ui["inbox"].update({k: v for k, v in ib.items() if k in ("enabled", "interval_min", "days")})
-    save_ui(ui)
     nxt = next_round_time(ui)
+    if nxt and nxt <= datetime.now() and {k: ui["schedule"].get(k) for k in slot_before} != slot_before:
+        # a new or changed schedule starts with its next slot, like cron: a slot that is already
+        # past at save time is waived, not caught up (the catch-up is for slots missed while asleep)
+        ui["last_round_date"] = nxt.date().isoformat()
+        nxt = next_round_time(ui)
+    save_ui(ui)
     SCHED_STATE["next_round"] = nxt.isoformat(timespec="minutes") if nxt else None
-    _sched_event("Schedule updated")
+    SCHED_STATE["round_blocked"] = None
+    _sched_event(f"Schedule updated; next round {nxt:%a %d %b %H:%M}" if nxt else "Schedule updated; no round scheduled")
     return schedule_get()
 
 

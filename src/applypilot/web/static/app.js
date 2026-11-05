@@ -109,6 +109,13 @@ function when(iso, withTime = true) {
   return d.toLocaleDateString(undefined, { day: "numeric", month: "short" }) +
     (withTime ? " " + d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) : "");
 }
+// The scheduler keeps a missed slot due until the round starts (the Mac slept through it), so a
+// slot in the past means "due now", not "next".
+function roundText(sch, prefix) {
+  if (!sch.next_round) return "No round scheduled";
+  if (new Date(sch.next_round) > Date.now()) return prefix + when(sch.next_round);
+  return sch.round_blocked ? "Round due, waiting: " + sch.round_blocked : "Round due, starting now";
+}
 const human = (k) => k.replace(/^_+/, "").replace(/_/g, " ").replace(/\b\w/, (c) => c.toUpperCase());
 
 const ERR_LABEL = {
@@ -245,7 +252,7 @@ async function pollSide() {
     else if (l.external.length) txt = "Outside the UI: " + l.external.map((x) => x.replace(/^applypilot /, "").split(" ").slice(0, 2).join(" ")).join(", ");
     else txt = "Idle";
     if (l.in_progress.length) txt += ` · ${l.in_progress.length} applying`;
-    const next = l.next_round ? "Next round " + when(l.next_round) : "No round scheduled";
+    const next = roundText(l, "Next round ");
     const q = l.queue || {};
     const pipe = (q.enrich || 0) + (q.score || 0) + (q.tailor || 0) + (q.pdf || 0);
     const waiting = [pipe ? `${fmtNum(pipe)} to score & tailor` : "", q.apply ? `${fmtNum(q.apply)} to apply` : "", q.followups ? `${q.followups} follow-ups` : ""].filter(Boolean);
@@ -662,7 +669,7 @@ routes.runs = async (view) => {
         } }, OPEN_LOGS.has(x.id) ? "Hide" : "Log"))),
         OPEN_LOGS.has(x.id) ? h("tr", {}, h("td", { colspan: 5, style: "padding:0 0 10px" }, keepScroll(h("pre", { class: "log tall", style: "margin:0" }, OPEN_LOGS.get(x.id) || "Loading…"), "histlog:" + x.id))) : null])))
       : h("p", { class: "muted" }, "No runs yet in this session."));
-    nextEl.textContent = (r.scheduler.next_round ? "Next scheduled round: " + when(r.scheduler.next_round) : "No round scheduled") +
+    nextEl.textContent = roundText(r.scheduler, "Next scheduled round: ") +
       (r.scheduler.next_inbox ? " · next Gmail check " + when(r.scheduler.next_inbox) : "");
   }
 
