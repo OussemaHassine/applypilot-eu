@@ -806,6 +806,96 @@ def applications(status: str = "applied", q: str = "", country: str = "", limit:
     return {"total": len(items), "items": items[offset:offset + limit]}
 
 
+# postings ---------------------------------------------------------------
+
+_POSTING_STAGES = {
+    "unscored": "fit_score IS NULL",
+    "scored": "fit_score IS NOT NULL",
+    "match": "fit_score >= ?",
+    "below": "fit_score IS NOT NULL AND fit_score < ?",
+    "cv": "tailored_resume_path IS NOT NULL AND apply_status IS NULL",
+    "applied": "apply_status='applied'",
+    "failed": "apply_status='failed'",
+}
+
+
+@app.get("/api/postings")
+def postings(q: str = "", stage: str = "all", site: str = "", country: str = "", score: str = "",
+             sort: str = "newest", limit: int = 100, offset: int = 0):
+    """Every posting the searches found, with its fit score (the Postings page).
+
+    `score` is "7" (exactly 7) or "7+" (7 and up). Country comes from the location text,
+    so it is filtered in Python after the SQL; 13k rows take a few ms."""
+    min_score = int(run_settings()["MIN_SCORE"])
+    where, params = [], []
+    if stage in _POSTING_STAGES:
+        where.append(_POSTING_STAGES[stage])
+        if "?" in _POSTING_STAGES[stage]:
+            params.append(min_score)
+    if site:
+        where.append("site = ?")
+        params.append(site)
+    if score:
+        try:
+            if score.endswith("+"):
+                where.append("fit_score >= ?")
+                params.append(int(score[:-1]))
+            else:
+                where.append("fit_score = ?")
+                params.append(int(score))
+        except ValueError:
+            pass
+    if q:
+        where.append("(title LIKE ? OR location LIKE ? OR site LIKE ? OR full_description LIKE ?)")
+        params += [f"%{q}%"] * 4
+    order = {"newest": "discovered_at DESC", "oldest": "discovered_at ASC",
+             "score": "fit_score IS NULL, fit_score DESC, discovered_at DESC"}.get(sort, "discovered_at DESC")
+    sql = ("SELECT url, title, location, site, fit_score, substr(score_reasoning, 1, 240) reason, apply_status, "
+           "apply_error, discovered_at, scored_at, full_description IS NOT NULL has_text, "
+           "tailored_resume_path IS NOT NULL has_cv FROM jobs"
+           + (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY " + order)
+    items = rows(sql, tuple(params))
+    for it in items:
+        it["country"] = country_of(it["location"])
+    if country:
+        items = [i for i in items if i["country"] == country]
+    scores: dict[int, int] = {}
+    sites: dict[str, int] = {}
+    countries: dict[str, int] = {}
+    for i in items:
+        if i["fit_score"] is not None:
+            scores[i["fit_score"]] = scores.get(i["fit_score"], 0) + 1
+        sites[i["site"] or "?"] = sites.get(i["site"] or "?", 0) + 1
+        countries[i["country"]] = countries.get(i["country"], 0) + 1
+    day_ago = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    from applypilot.enrichment.detail import SKIP_DETAIL_SITES   # glassdoor rows are never fetched: not "waiting"
+    skip = ",".join(f"'{x}'" for x in sorted(SKIP_DETAIL_SITES))
+    s = rows(f"""SELECT count(*) total, sum(fit_score IS NOT NULL) scored,
+                       sum(fit_score IS NULL AND site NOT IN ({skip})) unscored,
+                       sum(fit_score >= ?) matches, sum(apply_status='applied') applied,
+                       sum(apply_status='failed') failed,
+                       sum(tailored_resume_path IS NOT NULL AND apply_status IS NULL) cv,
+                       sum(discovered_at > ?) last_24h FROM jobs""", (min_score, day_ago))[0]
+    return {"total": len(items), "items": items[offset:offset + limit], "min_score": min_score,
+            "scores": scores, "sites": sorted(sites.items(), key=lambda kv: -kv[1]),
+            "countries": sorted(countries.items()), "summary": {k: v or 0 for k, v in s.items()}}
+
+
+@app.get("/api/postings.csv")
+def postings_csv(q: str = "", stage: str = "all", site: str = "", country: str = "", score: str = "", sort: str = "newest"):
+    import csv
+    import io
+    items = postings(q=q, stage=stage, site=site, country=country, score=score, sort=sort, limit=1000000)["items"]
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["found", "title", "board", "country", "location", "fit_score", "why", "status", "detail", "url"])
+    for it in items:
+        w.writerow([(it["discovered_at"] or "")[:16], it["title"], it["site"], it["country"], it["location"],
+                    it["fit_score"], (it["reason"] or "").replace("\n", " "), it["apply_status"] or "", it["apply_error"] or "", it["url"]])
+    return Response(buf.getvalue(), media_type="text/csv",
+                    headers={"Content-Disposition": f'attachment; filename="applypilot-postings-{datetime.now().date()}.csv"'})
+
+
 def worker_notes(job: dict) -> str:
     """The apply agent's notes for this job, from logs/worker-*.log."""
     targets = {u for u in (job.get("application_url"), job.get("url")) if u}

@@ -24,7 +24,7 @@ discover ─► enrich ─► score ─► tailor ─► pdf ─► apply (cover
 
 | Stage | What happens | Engine |
 |---|---|---|
-| **discover** | Searches Indeed, LinkedIn and Google Jobs for every title × market in `searches.yaml`, plus ~50 company Workday portals and direct career sites. Drops postings outside your accepted locations. | [JobSpy](https://github.com/Bunsly/JobSpy), HTTP |
+| **discover** | Searches Indeed, LinkedIn and Google Jobs for every title × market in `searches.yaml`, plus ~50 company Workday portals and direct career sites. Reads the job-alert emails boards send you (HelloWork: its search pages may not be crawled, its alerts may be read) and turns them into postings (`applypilot alerts`, also run by every Gmail check). Drops postings outside your accepted locations. | [JobSpy](https://github.com/Bunsly/JobSpy), HTTP, IMAP |
 | **enrich** | Downloads the full description and the real "apply" link of each posting (structured data first, AI extraction as a fallback). | Playwright + LLM |
 | **score** | Rates each posting 1–10 against your base CV. Internships, PhDs, over-senior and off-domain roles are capped. | LLM |
 | **tailor** | Edits your own CV text for the job: the title line, the profile paragraph, the order of bullets/skills/projects, and at most 4 reworded bullets. Everything else stays identical and is checked line by line against the base CV; a judge model then checks for invented facts. Rendered with the Charter LaTeX template that reproduces the look of the original CVs (`**bold**` in the base text renders bold). | LLM |
@@ -114,6 +114,7 @@ applypilot ui            # http://127.0.0.1:8765, opens your browser
 | Page | What it is for |
 |---|---|
 | **Overview** | Live dashboard: applications sent, replies, interviews, action needed, queue, applications per day, the funnel from posting to application, countries, why applications were not sent, recent activity, what is running right now. Refreshes every 10 s. |
+| **Postings** | Every posting the searches found, with its fit score and the AI's reason: totals, a clickable score histogram, filters by stage, score, board and country, search, paging and CSV export. |
 | **Applications** | Every job by state (sent, ready, needs info, not sent, all matches) with search and country filter. A row opens the tailored CV and cover letter (PDF), why it matched, the employer's emails and the agent's step-by-step notes from the form. |
 | **Responses** | Company replies from Gmail sorted into action needed, interview, test, offer, recruiter, rejection; one click to open the email. |
 | **Runs & schedule** | Start a full round or any single stage, watch the live log, stop it. Daily schedule (time + weekdays) and the Gmail watcher interval. |

@@ -74,6 +74,18 @@ def _run_discover(workers: int = 1) -> dict:
         console.print(f"  [red]JobSpy error:[/red] {e}")
         stats["jobspy"] = f"error: {e}"
 
+    # Job-alert emails (HelloWork cannot be crawled; its alerts can be read)
+    console.print("  [cyan]Job-alert emails...[/cyan]")
+    try:
+        from applypilot.discovery.alerts import ingest_alerts
+        a = ingest_alerts()
+        console.print(f"  Job alerts: {a['emails']} emails, {a['new']} new postings")
+        stats["alerts"] = "ok"
+    except Exception as e:
+        log.error("Job-alert emails failed: %s", e)
+        console.print(f"  [red]Job-alert emails error:[/red] {e}")
+        stats["alerts"] = f"error: {e}"
+
     # Workday corporate scraper
     console.print("  [cyan]Workday corporate scraper...[/cyan]")
     try:

@@ -266,12 +266,14 @@ def inbox(
     no_notify: bool = typer.Option(False, "--no-notify", help="Do not show macOS notifications."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Classify and print only: no labels, notifications or saving."),
     show: bool = typer.Option(False, "--show", help="Print all stored responses and exit (no Gmail access)."),
+    no_alerts: bool = typer.Option(False, "--no-alerts", help="Do not turn job-alert emails (HelloWork) into postings."),
 ) -> None:
     """Read Gmail, find replies from companies, label them and notify you."""
     _bootstrap()
     import time
     from rich.table import Table
     from applypilot.inbox import check_inbox, write_digest, CATEGORIES
+    from applypilot.discovery.alerts import ingest_alerts
 
     if show:
         path = write_digest()
@@ -299,12 +301,40 @@ def inbox(
             console.print("[dim]All responses: ~/ApplyPilot/responses.md[/dim]")
         return True
 
+    def alerts_once() -> None:
+        if no_alerts:
+            return
+        try:
+            a = ingest_alerts(days=max(days, 3), dry_run=dry_run)
+        except Exception as exc:
+            console.print(f"[red]Job-alert emails failed:[/red] {exc}")
+            return
+        if a["emails"]:
+            console.print(f"[dim]Job alerts: {a['emails']} emails, {a['new']} new postings, "
+                          f"{a['existing']} already known, {a['filtered']} outside your locations[/dim]")
+
     ok = once()
+    alerts_once()
     while watch:
         time.sleep(max(1, interval) * 60)
         once()
+        alerts_once()
     if not ok:
         raise typer.Exit(code=1)   # a failed check must not show as "Done" in the UI
+
+
+@app.command()
+def alerts(
+    days: int = typer.Option(7, "--days", "-d", help="How many days of alert emails to read."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be added without saving."),
+) -> None:
+    """Turn job-alert emails in Gmail (HelloWork) into postings for the pipeline."""
+    _bootstrap()
+    from applypilot.discovery.alerts import ingest_alerts
+    a = ingest_alerts(days=days, dry_run=dry_run)
+    console.print(f"Job alerts: {a['emails']} emails read, {a['links']} links, [bold]{a['new']} new postings[/bold], "
+                  f"{a['existing']} already known, {a['filtered']} outside your locations, {a['errors']} errors"
+                  + (" (dry run, nothing saved)" if dry_run else ""))
 
 
 @app.command()

@@ -431,6 +431,84 @@ routes.applications = async (view) => {
   // fill counts for the other tabs quietly
   for (const [k] of tabs) if (counts[k] == null) api(`/api/applications?status=${k}&limit=1`).then((d) => { counts[k] = d.total; drawTabs(); }).catch(() => {});
 };
+// ── Postings: everything the searches found, with scores ───────────────
+routes.postings = async (view) => {
+  const state = { q: "", stage: "all", site: "", country: "", score: "", sort: "newest", offset: 0 };
+  const PAGE = 100;
+  const STAGES = [["all", "Everything"], ["unscored", "Not scored yet"], ["scored", "Scored"], ["match", "Matches"], ["below", "Below the bar"], ["cv", "CV ready, not sent"], ["applied", "Applied"], ["failed", "Not sent"]];
+  const SCORES = [["", "Any score"], ["8+", "8 and up"], ["7+", "7 and up"], ["6+", "6 and up"], ...[10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0].map((n) => [String(n), `Exactly ${n}`])];
+  const kpis = h("div", { class: "kpis", style: "grid-template-columns:repeat(5,1fr);margin-bottom:16px" });
+  const hist = h("div", { class: "card", style: "margin-bottom:16px" });
+  const list = h("div");
+  const pager = h("div", { class: "row", style: "margin-top:12px;justify-content:space-between" });
+  const reload = (k, v) => { state[k] = v; state.offset = 0; load(); };
+  const select = (opts, key) => h("select", { style: "max-width:190px", onchange: (e) => reload(key, e.target.value) }, ...opts.map(([v, l]) => h("option", { value: v }, l)));
+  const stageSel = select(STAGES, "stage");
+  const scoreSel = select(SCORES, "score");
+  const siteSel = select([["", "All boards"]], "site");
+  const countrySel = select([["", "All countries"]], "country");
+  const sortSel = select([["newest", "Newest first"], ["score", "Highest score first"], ["oldest", "Oldest first"]], "sort");
+  const search = h("input", { type: "search", placeholder: "Search title, place, board or text…", style: "max-width:300px", oninput: debounce((e) => reload("q", e.target.value), 300) });
+  const exportBtn = h("a", { class: "btn sm", href: "#", download: "" }, "Export this view (CSV)");
+  const qs = () => `q=${encodeURIComponent(state.q)}&stage=${state.stage}&site=${encodeURIComponent(state.site)}&country=${encodeURIComponent(state.country)}&score=${encodeURIComponent(state.score)}&sort=${state.sort}`;
+  const kpi = (l, v, d) => h("div", { class: "kpi" }, h("div", { class: "l" }, l), h("div", { class: "v" }, fmtNum(v || 0)), h("div", { class: "d" }, d));
+  const stageChip = (it, min) => {
+    if (it.apply_status) return statusChip(it.apply_status, it.apply_error);
+    if (it.has_cv) return h("span", { class: "chip plain" }, "CV ready");
+    if (it.fit_score != null) return it.fit_score >= min ? h("span", { class: "chip good" }, "Match") : h("span", { class: "chip" }, "Below the bar");
+    return h("span", { class: "chip plain" }, it.has_text ? "Scoring next" : "Fetching next");
+  };
+  let filled = false;
+  async function load() {
+    const d = await api(`/api/postings?${qs()}&limit=${PAGE}&offset=${state.offset}`);
+    exportBtn.href = `/api/postings.csv?${qs()}`;
+    if (!filled) {
+      filled = true;
+      d.sites.forEach(([s, n]) => siteSel.append(h("option", { value: s }, `${s} (${fmtNum(n)})`)));
+      d.countries.forEach(([c, n]) => countrySel.append(h("option", { value: c }, `${c} (${fmtNum(n)})`)));
+    }
+    const s = d.summary, min = d.min_score;
+    mount(kpis,
+      kpi("Postings found", s.total, `${fmtNum(s.last_24h)} in the last 24 h`),
+      kpi("Scored", s.scored, `${fmtNum(s.unscored)} still to fetch or score`),
+      kpi(`Matches (${min} and up)`, s.matches, `${s.scored ? Math.round((s.matches / s.scored) * 100) : 0}% of scored postings`),
+      kpi("CV ready, not sent", s.cv, "waiting for Apply"),
+      kpi("Applied", s.applied, `${fmtNum(s.failed)} not sent`));
+    const max = Math.max(1, ...Object.values(d.scores));
+    mount(hist,
+      h("div", { class: "row", style: "justify-content:space-between;margin-bottom:6px" }, h("h2", {}, "Fit scores in this view"),
+        h("span", { class: "muted small" }, `${fmtNum(d.total)} postings · click a bar to keep only that score`)),
+      h("div", { class: "scorebars" }, ...[...Array(11).keys()].map((i) => {
+        const n = d.scores[i] || 0, on = state.score === String(i);
+        return h("button", { class: "scorebar" + (on ? " on" : ""), title: `${fmtNum(n)} scored ${i}`,
+          onclick: () => { scoreSel.value = on ? "" : String(i); reload("score", scoreSel.value); } },
+          h("div", { class: "n small muted" }, n ? fmtNum(n) : ""),
+          h("div", { class: "bar", style: `height:${Math.max(2, Math.round((n / max) * 72))}px;background:${i >= min ? "var(--series)" : "var(--series-soft)"}` }),
+          h("div", { class: "l" }, i));
+      })));
+    mount(list, d.items.length ? h("div", { class: "card flush" }, h("table", {},
+      h("thead", {}, h("tr", {}, h("th", {}, "Found"), h("th", {}, "Role"), h("th", {}, "Where"), h("th", { class: "num" }, "Fit"), h("th", {}, "Stage"), h("th", {}, ""))),
+      h("tbody", {}, d.items.map((it) => h("tr", { class: "click", onclick: () => openJob(it.url) },
+        h("td", { class: "muted small num", style: "text-align:left;white-space:nowrap" }, when(it.discovered_at, false) || "–"),
+        h("td", {}, h("div", { class: "t-title" }, it.title || "(no title)"), h("div", { class: "t-sub" }, it.site)),
+        h("td", {}, h("div", {}, it.country), h("div", { class: "t-sub" }, it.location || "")),
+        h("td", { class: "num", title: it.reason || "" }, h("span", { class: "score" }, it.fit_score ?? "–")),
+        h("td", {}, stageChip(it, min)),
+        h("td", { class: "small muted" }, it.has_cv ? "CV" : "")))))) : h("div", { class: "card empty" }, "No postings match these filters."));
+    const from = d.total ? state.offset + 1 : 0, to = Math.min(d.total, state.offset + PAGE);
+    mount(pager, h("span", { class: "muted small" }, `Showing ${fmtNum(from)}–${fmtNum(to)} of ${fmtNum(d.total)}`),
+      h("div", { class: "row" },
+        h("button", { class: "btn sm", disabled: state.offset === 0 || null, onclick: () => { state.offset = Math.max(0, state.offset - PAGE); load(); } }, "Previous"),
+        h("button", { class: "btn sm", disabled: to >= d.total || null, onclick: () => { state.offset += PAGE; load(); } }, "Next")));
+  }
+  mount(view,
+    h("div", { class: "head" }, h("div", {}, h("h1", {}, "Postings"), h("p", { class: "sub" }, "Every posting the searches and job alerts found, with the fit score the AI gave it. Hover a score for the reason; click a row for the details."))),
+    kpis, hist,
+    h("div", { class: "row", style: "margin-bottom:14px;flex-wrap:wrap" }, search, stageSel, scoreSel, siteSel, countrySel, sortSel, h("span", { class: "spacer" }), exportBtn),
+    list, pager);
+  await load();
+};
+
 function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
 
 // ── Responses ───────────────────────────────────────────────────────────
