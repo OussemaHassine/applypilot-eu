@@ -114,7 +114,7 @@ applypilot ui            # http://127.0.0.1:8765, opens your browser
 | Page | What it is for |
 |---|---|
 | **Overview** | Live dashboard: applications sent, replies, interviews, action needed, queue, applications per day, the funnel from posting to application, countries, why applications were not sent, recent activity, what is running right now. Refreshes every 10 s. |
-| **Postings** | Every posting the searches found, with its fit score and the AI's reason: totals, a clickable score histogram, filters by stage, score, board and country, search, paging and CSV export. |
+| **Postings** | Every posting the searches found, with its fit score and the AI's reason: totals, a clickable score histogram, filters by stage, score, board and country, search, paging and CSV export. Filters, sort and page are kept until you press Reset filters, also across job actions and reloads. |
 | **Applications** | Every job by state (sent, ready, needs info, not sent, all matches) with search and country filter. A row opens the tailored CV and cover letter (PDF), why it matched, the employer's emails and the agent's step-by-step notes from the form. |
 | **Responses** | Company replies from Gmail sorted into action needed, interview, test, offer, recruiter, rejection; one click to open the email. |
 | **Runs & schedule** | Start a full round or any single stage, watch the live log, stop it, or pause it: the job in hand finishes, the run waits where it is, and Resume continues from the next job (nothing is redone). Daily schedule (time + weekdays) and the Gmail watcher interval. |

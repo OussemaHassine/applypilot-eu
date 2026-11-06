@@ -225,10 +225,12 @@ function hbars(items, { ramp = false, fmt = fmtNum } = {}) {
 // ── router ──────────────────────────────────────────────────────────────
 const routes = {};
 let pageTimers = [];
+let pageRefresh = null;   // set by a page: reload its data in place (filters, scroll and page stay)
 function every(ms, fn) { pageTimers.push(setInterval(fn, ms)); }
 function clearTimers() { pageTimers.forEach(clearInterval); pageTimers = []; }
 async function navigate() {
   clearTimers();
+  pageRefresh = null;
   closeDrawer();
   const name = (location.hash.replace(/^#\/?/, "").split("?")[0] || "overview");
   document.querySelectorAll("#nav a").forEach((a) => a.classList.toggle("active", a.dataset.route === name));
@@ -310,7 +312,7 @@ async function openJob(url) {
 }
 
 async function jobAction(url, action, msg) {
-  try { await api("/api/job/action", { method: "POST", body: { url, action } }); toast(msg); closeDrawer(); navigate(); }
+  try { await api("/api/job/action", { method: "POST", body: { url, action } }); toast(msg); closeDrawer(); if (pageRefresh) await pageRefresh(); else navigate(); }
   catch (e) { toast(e.message, true); }
 }
 
@@ -385,6 +387,7 @@ routes.overview = async (view) => {
               h("div", { class: "t-title", style: "margin-top:3px", title: e.title }, e.url ? h("a", { href: "#", onclick: (ev) => { ev.preventDefault(); openJob(e.url); } }, e.title) : e.title),
               h("div", { class: "t-sub" }, e.sub || ""))))))));
   };
+  pageRefresh = render;
   await render();
   every(10000, () => render().catch(() => {}));
 };
@@ -401,19 +404,23 @@ async function startRun(kind) {
 
 // ── Applications ────────────────────────────────────────────────────────
 routes.applications = async (view) => {
-  const state = { status: "applied", q: "", country: "" };
+  const DEFAULTS = { status: "applied", q: "", country: "" };
+  const state = remembered("applications", DEFAULTS);
   const tabs = [["applied", "Sent"], ["queued", "Ready to send"], ["parked", "Needs info"], ["failed", "Not sent"], ["matches", "All matches"]];
   const list = h("div");
   const counts = {};
   const tabBar = h("div", { class: "tabs" });
   const drawTabs = () => mount(tabBar, ...tabs.map(([k, l]) =>
     h("button", { class: state.status === k ? "on" : "", onclick: () => { state.status = k; drawTabs(); load(); } }, l, counts[k] != null ? h("span", { class: "count" }, counts[k]) : null)));
-  const search = h("input", { type: "search", placeholder: "Search role, place or text…", style: "max-width:320px", oninput: debounce((e) => { state.q = e.target.value; load(); }, 300) });
+  const search = h("input", { type: "search", value: state.q, placeholder: "Search role, place or text…", style: "max-width:320px", oninput: debounce((e) => { state.q = e.target.value; load(); }, 300) });
   const banner = h("div");
   const exportBtn = h("a", { class: "btn sm", href: "/api/applications.csv?status=applied", download: "" }, "Export sent (CSV)");
   const countrySel = h("select", { style: "max-width:200px", onchange: (e) => { state.country = e.target.value; load(); } }, h("option", { value: "" }, "All countries"));
+  const resetBtn = h("button", { class: "btn sm ghost", onclick: () => { Object.assign(state, DEFAULTS); search.value = ""; countrySel.value = ""; drawTabs(); load(); } }, "Reset filters");
 
   async function load() {
+    remember("applications", state, DEFAULTS);
+    show(resetBtn, filtered(state, DEFAULTS));
     const d = await api(`/api/applications?status=${state.status}&q=${encodeURIComponent(state.q)}&country=${encodeURIComponent(state.country)}&limit=500`);
     counts[state.status] = d.total;
     drawTabs();
@@ -422,9 +429,10 @@ routes.applications = async (view) => {
     mount(banner, state.status === "parked" && d.total ? h("div", { class: "callout", style: "margin-bottom:14px" },
       "These forms asked for a fact that is not in your profile. Add it under Profile → Extra facts (or the matching field), then ",
       h("button", { class: "btn sm", style: "margin-left:6px", onclick: async () => { const r = await api("/api/jobs/requeue_parked", { method: "POST" }); toast(`${r.requeued} re-queued`); load(); } }, "Re-queue all")) : null);
-    if (!state.q && !state.country && countrySel.options.length === 1) {
-      [...new Set(d.items.map((i) => i.country))].sort().forEach((c) => countrySel.append(h("option", { value: c }, c)));
-    }
+    // the country list follows the tab (whatever the search says) and keeps the chosen country
+    const countries = d.countries.includes(state.country) || !state.country ? d.countries : [state.country, ...d.countries];
+    countrySel.replaceChildren(h("option", { value: "" }, "All countries"), ...countries.map((c) => h("option", { value: c }, c)));
+    countrySel.value = state.country;
     mount(list, d.items.length ? h("div", { class: "card flush" }, h("table", {},
       h("thead", {}, h("tr", {}, h("th", {}, "When"), h("th", {}, "Role"), h("th", {}, "Where"), h("th", { class: "num" }, "Fit"), h("th", {}, "Status"), h("th", {}, ""))),
       h("tbody", {}, d.items.map((it) => h("tr", { class: "click", onclick: () => openJob(it.url) },
@@ -437,15 +445,17 @@ routes.applications = async (view) => {
   }
   mount(view, 
     h("div", { class: "head" }, h("div", {}, h("h1", {}, "Applications"), h("p", { class: "sub" }, "Click a row for the tailored CV, cover letter, emails and what the agent did on the form."))),
-    tabBar, h("div", { class: "row", style: "margin-bottom:14px" }, search, countrySel, h("span", { class: "spacer" }), exportBtn), banner, list);
+    tabBar, h("div", { class: "row", style: "margin-bottom:14px" }, search, countrySel, resetBtn, h("span", { class: "spacer" }), exportBtn), banner, list);
   drawTabs();
+  pageRefresh = load;
   await load();
   // fill counts for the other tabs quietly
   for (const [k] of tabs) if (counts[k] == null) api(`/api/applications?status=${k}&limit=1`).then((d) => { counts[k] = d.total; drawTabs(); }).catch(() => {});
 };
 // ── Postings: everything the searches found, with scores ───────────────
 routes.postings = async (view) => {
-  const state = { q: "", stage: "all", site: "", country: "", score: "", sort: "newest", offset: 0 };
+  const DEFAULTS = { q: "", stage: "all", site: "", country: "", score: "", sort: "newest", offset: 0 };
+  const state = remembered("postings", DEFAULTS);
   const PAGE = 100;
   const STAGES = [["all", "Everything"], ["unscored", "Not scored yet"], ["scored", "Scored"], ["match", "Matches"], ["below", "Below the bar"], ["cv", "CV ready, not sent"], ["applied", "Applied"], ["failed", "Not sent"]];
   const SCORES = [["", "Any score"], ["8+", "8 and up"], ["7+", "7 and up"], ["6+", "6 and up"], ...[10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0].map((n) => [String(n), `Exactly ${n}`])];
@@ -460,8 +470,14 @@ routes.postings = async (view) => {
   const siteSel = select([["", "All boards"]], "site");
   const countrySel = select([["", "All countries"]], "country");
   const sortSel = select([["newest", "Newest first"], ["score", "Highest score first"], ["oldest", "Oldest first"]], "sort");
-  const search = h("input", { type: "search", placeholder: "Search title, place, board or text…", style: "max-width:300px", oninput: debounce((e) => reload("q", e.target.value), 300) });
+  const search = h("input", { type: "search", value: state.q, placeholder: "Search title, place, board or text…", style: "max-width:300px", oninput: debounce((e) => reload("q", e.target.value), 300) });
   const exportBtn = h("a", { class: "btn sm", href: "#", download: "" }, "Export this view (CSV)");
+  const controls = { q: search, stage: stageSel, score: scoreSel, site: siteSel, country: countrySel, sort: sortSel };
+  const resetBtn = h("button", { class: "btn sm ghost", onclick: () => { Object.assign(state, DEFAULTS); load(); } }, "Reset filters");
+  const syncControls = () => {
+    for (const [k, el] of Object.entries(controls)) el.value = state[k];
+    show(resetBtn, filtered(state, DEFAULTS));
+  };
   const qs = () => `q=${encodeURIComponent(state.q)}&stage=${state.stage}&site=${encodeURIComponent(state.site)}&country=${encodeURIComponent(state.country)}&score=${encodeURIComponent(state.score)}&sort=${state.sort}`;
   const kpi = (l, v, d) => h("div", { class: "kpi" }, h("div", { class: "l" }, l), h("div", { class: "v" }, fmtNum(v || 0)), h("div", { class: "d" }, d));
   const stageChip = (it, min) => {
@@ -472,13 +488,16 @@ routes.postings = async (view) => {
   };
   let filled = false;
   async function load() {
-    const d = await api(`/api/postings?${qs()}&limit=${PAGE}&offset=${state.offset}`);
+    remember("postings", state, DEFAULTS);
+    const d = await api(`/api/postings?${qs()}&limit=${PAGE}&offset=${state.offset}${filled ? "" : "&facets=1"}`);
+    if (state.offset && state.offset >= d.total) { state.offset = 0; return load(); }   // the remembered page no longer exists
     exportBtn.href = `/api/postings.csv?${qs()}`;
-    if (!filled) {
+    if (!filled) {   // board and country lists cover every posting, not just this view
       filled = true;
       d.sites.forEach(([s, n]) => siteSel.append(h("option", { value: s }, `${s} (${fmtNum(n)})`)));
       d.countries.forEach(([c, n]) => countrySel.append(h("option", { value: c }, `${c} (${fmtNum(n)})`)));
     }
+    syncControls();
     const s = d.summary, min = d.min_score;
     mount(kpis,
       kpi("Postings found", s.total, `${fmtNum(s.last_24h)} in the last 24 h`),
@@ -516,20 +535,37 @@ routes.postings = async (view) => {
   mount(view,
     h("div", { class: "head" }, h("div", {}, h("h1", {}, "Postings"), h("p", { class: "sub" }, "Every posting the searches and job alerts found, with the fit score the AI gave it. Hover a score for the reason; click a row for the details."))),
     kpis, hist,
-    h("div", { class: "row", style: "margin-bottom:14px;flex-wrap:wrap" }, search, stageSel, scoreSel, siteSel, countrySel, sortSel, h("span", { class: "spacer" }), exportBtn),
+    h("div", { class: "row", style: "margin-bottom:14px;flex-wrap:wrap" }, search, stageSel, scoreSel, siteSel, countrySel, sortSel, resetBtn, h("span", { class: "spacer" }), exportBtn),
     list, pager);
+  syncControls();
+  pageRefresh = load;
   await load();
 };
 
+// Filters a page keeps between visits and page refreshes (this browser only). A page reads
+// them when it opens and writes them on every change; "Reset filters" forgets them.
+function remembered(key, defaults) {
+  const out = { ...defaults };
+  try { const s = JSON.parse(localStorage.getItem("applypilot." + key) || "{}"); for (const k in defaults) if (k in s) out[k] = s[k]; } catch (_) {}
+  return out;
+}
+const filtered = (state, defaults) => Object.keys(defaults).some((k) => state[k] !== defaults[k]);
+function remember(key, state, defaults) {
+  try { if (filtered(state, defaults)) localStorage.setItem("applypilot." + key, JSON.stringify(state)); else localStorage.removeItem("applypilot." + key); } catch (_) {}
+}
+// .btn sets display, which beats the hidden attribute: show/hide through the inline style
+const show = (el, on) => { el.style.display = on ? "" : "none"; return el; };
 function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
 
 // ── Responses ───────────────────────────────────────────────────────────
 routes.responses = async (view) => {
-  let cat = "", showHandled = false;
+  const DEFAULTS = { cat: "", showHandled: false };
+  let { cat, showHandled } = remembered("responses", DEFAULTS);
   const order = ["", "info_request", "interview", "assessment", "offer", "recruiter_outreach", "rejection", "confirmation", "job_alert"];
   const listEl = h("div");
   const tabBar = h("div", { class: "tabs" });
   async function load() {
+    remember("responses", { cat, showHandled }, DEFAULTS);
     const d = await api(`/api/responses?category=${cat}&include_handled=${showHandled ? 1 : 0}`);
     const total = Object.entries(d.counts).filter(([k]) => !["confirmation", "job_alert", "other"].includes(k)).reduce((a, [, v]) => a + v, 0);
     mount(tabBar, ...order.map((k) => h("button", { class: cat === k ? "on" : "", onclick: () => { cat = k; load(); } },
@@ -548,9 +584,10 @@ routes.responses = async (view) => {
   mount(view, 
     h("div", { class: "head" },
       h("div", {}, h("h1", {}, "Responses"), h("p", { class: "sub" }, "Job emails from your Gmail, sorted by the AI and labelled in Gmail under ApplyPilot/…. Confirmations and job alerts are kept out of the way.")),
-      h("div", { class: "row" }, h("label", { class: "check small" }, h("input", { type: "checkbox", onchange: (e) => { showHandled = e.target.checked; load(); } }), "Show handled"),
+      h("div", { class: "row" }, h("label", { class: "check small" }, h("input", { type: "checkbox", checked: showHandled, onchange: (e) => { showHandled = e.target.checked; load(); } }), "Show handled"),
         h("button", { class: "btn primary", onclick: () => startRun("inbox") }, "Check Gmail now"))),
     tabBar, listEl);
+  pageRefresh = load;
   await load();
   every(30000, () => load().catch(() => {}));
 };

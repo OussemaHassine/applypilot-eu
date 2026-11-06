@@ -840,9 +840,15 @@ def applications(status: str = "applied", q: str = "", country: str = "", limit:
     items = rows(sql, tuple(params))
     for it in items:
         it["country"] = country_of(it["location"])
+    # the country dropdown covers the whole tab, whatever the search or country filter says
+    if q:   # the search clause is the last one added: drop it and its three parameters
+        tab_sql = "SELECT location FROM jobs" + (" WHERE " + " AND ".join(where[:-1]) if where[:-1] else "")
+        countries = sorted({country_of(r["location"]) for r in rows(tab_sql, tuple(params[:-3]))} - {""})
+    else:
+        countries = sorted({i["country"] for i in items if i["country"]})
     if country:
         items = [i for i in items if i["country"] == country]
-    return {"total": len(items), "items": items[offset:offset + limit]}
+    return {"total": len(items), "items": items[offset:offset + limit], "countries": countries}
 
 
 # postings ---------------------------------------------------------------
@@ -860,7 +866,7 @@ _POSTING_STAGES = {
 
 @app.get("/api/postings")
 def postings(q: str = "", stage: str = "all", site: str = "", country: str = "", score: str = "",
-             sort: str = "newest", limit: int = 100, offset: int = 0):
+             sort: str = "newest", limit: int = 100, offset: int = 0, facets: int = 0):
     """Every posting the searches found, with its fit score (the Postings page).
 
     `score` is "7" (exactly 7) or "7+" (7 and up). Country comes from the location text,
@@ -899,11 +905,16 @@ def postings(q: str = "", stage: str = "all", site: str = "", country: str = "",
     if country:
         items = [i for i in items if i["country"] == country]
     scores: dict[int, int] = {}
-    sites: dict[str, int] = {}
-    countries: dict[str, int] = {}
     for i in items:
         if i["fit_score"] is not None:
             scores[i["fit_score"]] = scores.get(i["fit_score"], 0) + 1
+    # board and country lists: over every posting when the page opens (facets=1), so the
+    # dropdowns are complete even when it opens with a remembered filter; else this view
+    sites: dict[str, int] = {}
+    countries: dict[str, int] = {}
+    pool = [{"site": r["site"], "country": country_of(r["location"])}
+            for r in rows("SELECT site, location FROM jobs")] if facets else items
+    for i in pool:
         sites[i["site"] or "?"] = sites.get(i["site"] or "?", 0) + 1
         countries[i["country"]] = countries.get(i["country"], 0) + 1
     day_ago = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
