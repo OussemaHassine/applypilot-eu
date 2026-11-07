@@ -57,10 +57,10 @@ def _load_location_filter(search_cfg: dict | None = None):
     return accept, reject
 
 
-def _location_ok(location: str | None, accept: list[str], reject: list[str]) -> bool:
-    """Check if a job location passes the user's location filter."""
+def _location_ok(location: str | None, accept: list[str], reject: list[str], text: str = "") -> bool:
+    """Check if a job location passes the user's location filter (`text` is the title)."""
     from applypilot.discovery.locfilter import location_ok
-    return location_ok(location, accept, reject)
+    return location_ok(location, accept, reject, text=text)
 
 
 # -- Site configuration from YAML --------------------------------------------
@@ -93,7 +93,7 @@ def _store_jobs_filtered(
         url = job.get("url")
         if not url:
             continue
-        if not _location_ok(job.get("location"), accept_locs, reject_locs):
+        if not _location_ok(job.get("location"), accept_locs, reject_locs, text=job.get("title") or ""):
             filtered += 1
             continue
         try:

@@ -291,6 +291,11 @@ location_accept:
   - "Tallinn"
   - "Riga"
   - "Vilnius"
+# Places you only want for fully remote, freelance or B2B work: a posting located here is kept
+# when its location or title says remote / freelance / B2B and dropped otherwise. The scorer
+# applies the same rule from the full description.
+location_remote_only: []
+
 location_reject_non_remote:
   - "United States"
   - "USA"

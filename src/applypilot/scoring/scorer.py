@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from applypilot import pause
 from applypilot.config import RESUME_PATH, load_profile
 from applypilot.database import get_connection, get_jobs_by_stage
+from applypilot.lang import OTHER_LANG_NAMES, detect_other_language
 from applypilot.llm import get_client
 
 log = logging.getLogger(__name__)
@@ -21,28 +22,60 @@ log = logging.getLogger(__name__)
 
 # ── Scoring Prompt ────────────────────────────────────────────────────────
 
-SCORE_PROMPT = """You are a job fit evaluator. Given a candidate's resume and a job description, score how well the candidate fits the role.
+# The rubric is written for one candidate: {years}, {languages} and the derived values are filled
+# in from profile.json at runtime (see _system_prompt), so nothing personal lives in the code.
+SCORE_PROMPT = """You are a job fit evaluator for one specific candidate: a software QA / test-automation engineer with about {years} years of professional experience, who reads and works in {languages}. Given the candidate's resume and a job posting, score how good a target the posting is for THIS candidate to apply to. A high score means "apply now"; a low score means "do not bother".
 
-SCORING CRITERIA:
-- 9-10: Perfect match. Candidate has direct experience in nearly all required skills and qualifications.
-- 7-8: Strong match. Candidate has most required skills, minor gaps easily bridged.
-- 5-6: Moderate match. Candidate has some relevant skills but missing key requirements.
-- 3-4: Weak match. Significant skill gaps, would need substantial ramp-up.
-- 1-2: Poor match. Completely different field or experience level.
+CANDIDATE FACTS: about {years} years of professional software QA experience; highest degree: {education}; working languages: {languages}. Trust these over any assumption from dates in the resume.
 
-IMPORTANT FACTORS:
-- Weight technical skills heavily (programming languages, frameworks, tools)
-- Consider transferable experience (automation, scripting, API work)
-- Factor in the candidate's project experience
-- Be realistic about experience level vs. job requirements (years of experience, seniority)
-- Internships, apprenticeships, PhD/doctoral positions (Doktorand, dottorato, doctorant), student or entry-level-only roles (stage, tirocinio, stagiaire, alternance, Werkstudent, Praktikum, intern) are a poor fit for a candidate with several years of experience: score at most 4
-- Senior/Lead/Staff/Principal/Manager roles that require clearly more years than the candidate has: score at most 5
-- Roles outside software QA, test automation, SDET or AI-feature quality (e.g. hardware, firmware, pharma validation, manufacturing quality, network engineering): score at most 4 unless the skills clearly transfer
+HARD CAPS (check these first; the lowest applicable cap wins; name the cap in the reasoning):
+1. Posting language: a description written mainly in a language other than {languages} (German, Dutch, Spanish, Portuguese, Polish, Swedish, Danish, Norwegian, Finnish, Hungarian, Czech, ...): at most 3. A bilingual posting that carries a complete version in one of {languages} is fine.
+2. Role: the job must be software QA / software testing / test automation / SDET / QA automation / software quality engineering, in any title wording (QA Engineer, Software Tester, Testeur, Ingénieur QA, Ingénieur validation logiciel, Recette fonctionnelle, Collaudo software, Quality Assurance Analyst, Test Lead who still tests...). Testing AI/LLM features counts as QA. Anything else (developer, DevOps/SRE, data, product, support, business analyst, project manager, hardware/firmware/embedded test benches, pharma, manufacturing or automotive quality, network/telecom test): at most 3, even when some skills overlap.
+3. Internships, apprenticeships, PhD positions, student, graduate-programme or entry-level-only roles (stage, tirocinio, stagiaire, alternance, Werkstudent, Praktikum, intern): at most 3.
+4. People management or very senior roles (Head of QA, QA/Test Manager, Engineering Manager, Director, Principal, Staff) or any role asking for {years_plus5}+ years: at most 5. A "Senior QA Engineer" asking {years_plus2} years is NOT in this group.
+5. Eastern Europe (Poland, Czechia, Slovakia, Hungary, Romania, Bulgaria, Croatia, Serbia, Slovenia, Estonia, Latvia, Lithuania, Ukraine): wanted only when fully remote, freelance or a B2B contract. On-site or hybrid there: at most 3.
+6. A must-have the candidate cannot meet: fluency in a language outside {languages}, a security clearance, a specific citizenship, a certification or degree he does not hold: at most 4.
+
+YEARS OF EXPERIENCE: the candidate has about {years} years. A posting asking up to 2 years more ({years_plus1} or {years_plus2}) is still a full match on experience: take off at most one point and never let it block a 7. A posting asking 3 or 4 years more: take off two points. Seniority words alone ("senior", "confirmé", "experienced") are not a gap.
+
+SCORE (after the caps):
+- 9-10: hands-on QA / test-automation role matching the candidate's stack (Playwright or similar UI automation, Python/TypeScript test code, API testing, CI pipelines, Agile QA process, test strategy) with no real gap.
+- 7-8: QA / test-automation role where the candidate covers most requirements and the gaps are easy to bridge: another automation framework (Selenium, Cypress, Robot, Java/C#/Kotlin test code), another business domain, mobile or performance testing as a nice-to-have, a manual QA role with some automation.
+- 5-6: QA role with one key requirement genuinely missing: a mandatory specialism (performance, security, mobile-native, SAP/ERP, games, embedded) or a mandatory tool he never used that is the core of the job.
+- 3-4: capped by a rule above, or QA-adjacent at best.
+- 1-2: unrelated field.
+
+Count in favour: Playwright, Python, TypeScript/JavaScript, API testing (REST, Postman), CI/CD (GitLab CI, GitHub Actions), Agile/Scrum, test strategy and planning, exploratory and regression testing, AI-assisted testing, remote or hybrid work, English-speaking teams.
+Count against: mandatory languages outside {languages}, on-site five days a week far from Italy or France, clearance or citizenship requirements, purely manual roles with no automation at all (7 at most).
 
 RESPOND IN EXACTLY THIS FORMAT (no other text):
 SCORE: [1-10]
 KEYWORDS: [comma-separated ATS keywords from the job description that match or could match the candidate]
-REASONING: [2-3 sentences explaining the score]"""
+REASONING: [2-3 sentences in English, whatever the posting's language: which cap applied if any, the main match, the main gap]"""
+
+DEFAULT_POSTING_LANGUAGES = ["English", "French", "Italian"]
+_SYSTEM_PROMPT: str | None = None
+
+
+def _posting_languages() -> str:
+    """"English, French or Italian": the languages a posting may be written in (profile
+    languages.posting_languages, else the default)."""
+    langs = list((load_profile() or {}).get("languages", {}).get("posting_languages") or DEFAULT_POSTING_LANGUAGES)
+    return ", ".join(langs[:-1]) + " or " + langs[-1] if len(langs) > 1 else langs[0]
+
+
+def _system_prompt() -> str:
+    """SCORE_PROMPT with the candidate's years and posting languages filled in from the profile."""
+    global _SYSTEM_PROMPT
+    if _SYSTEM_PROMPT is None:
+        try:
+            years = int((load_profile() or {}).get("experience", {}).get("years_of_experience_total") or 3)
+        except (TypeError, ValueError):
+            years = 3
+        education = (load_profile() or {}).get("experience", {}).get("education_level") or "Master's degree"
+        _SYSTEM_PROMPT = SCORE_PROMPT.format(years=years, years_plus1=years + 1, years_plus2=years + 2,
+                                             years_plus5=years + 5, languages=_posting_languages(), education=education)
+    return _SYSTEM_PROMPT
 
 
 def _parse_score_response(response: str) -> dict:
@@ -84,6 +117,14 @@ def score_job(resume_text: str, job: dict) -> dict:
     Returns:
         {"score": int, "keywords": str, "reasoning": str}
     """
+    # Postings clearly written in a language the candidate does not read are not wanted:
+    # decide here and save the model call (bilingual or unclear texts still go to the model).
+    other = detect_other_language(job.get("full_description"))
+    if other:
+        return {"score": 2, "keywords": "",
+                "reasoning": f"Cap 1: the posting is written in {OTHER_LANG_NAMES[other]}; only postings in "
+                             f"{_posting_languages()} are wanted."}
+
     job_text = (
         f"TITLE: {job['title']}\n"
         f"COMPANY: {job['site']}\n"
@@ -92,7 +133,7 @@ def score_job(resume_text: str, job: dict) -> dict:
     )
 
     messages = [
-        {"role": "system", "content": SCORE_PROMPT},
+        {"role": "system", "content": _system_prompt()},
         {"role": "user", "content": f"RESUME:\n{resume_text}\n\n---\n\nJOB POSTING:\n{job_text}"},
     ]
 

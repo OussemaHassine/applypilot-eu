@@ -57,6 +57,55 @@ def detect_text_language(text: str | None, min_hits: int = 8, margin: float = 1.
     return best_lang
 
 
+# Languages the candidate does not read. Postings clearly written in one of them are not
+# wanted, so the scorer gives them a 2 without calling the model. Kept apart from _MARKERS so
+# detect_job_language() (which picks the CV language) still only ever answers en / fr / it.
+# Danish and Norwegian share their function words and are counted as one.
+_OTHER_MARKERS: dict[str, list[str]] = {
+    "de": ["und", "wir", "sie", "mit", "für", "der", "die", "das", "nicht", "bei", "eine", "ist",
+           "werden", "sind", "auf", "dich", "unser", "unsere", "bereich", "kenntnisse", "sowie"],
+    "nl": ["wij", "je", "een", "van", "het", "voor", "met", "niet", "zijn", "wordt", "bij", "onze",
+           "jij", "jouw", "ervaring", "werken", "functie", "binnen"],
+    "es": ["y", "para", "con", "una", "los", "las", "del", "que", "por", "nuestro", "equipo",
+           "experiencia", "buscamos", "puesto", "trabajo", "conocimientos"],
+    "pt": ["para", "com", "uma", "dos", "das", "você", "nossa", "equipa", "equipe", "experiência",
+           "procuramos", "vaga", "não", "também", "conhecimentos"],
+    "pl": ["oraz", "nie", "jest", "się", "dla", "przez", "które", "będzie", "jako", "nasz", "pracy",
+           "doświadczenie", "zespołu", "wymagania", "oferujemy", "umiejętność"],
+    "sv": ["och", "att", "för", "med", "är", "vi", "som", "på", "ett", "dig", "erfarenhet",
+           "arbeta", "söker", "inom"],
+    "da": ["og", "at", "til", "med", "er", "vi", "som", "på", "et", "dig", "deg", "erfaring",
+           "arbejde", "jobbe", "søger", "hos"],
+    "fi": ["ja", "että", "me", "sinulla", "kanssa", "kokemusta", "työ", "haemme", "tehtävässä",
+           "olet", "sekä", "meillä"],
+    "hu": ["és", "egy", "hogy", "nem", "vagy", "mint", "csapat", "munka", "tapasztalat",
+           "keresünk", "feladatok"],
+    "cs": ["pro", "jsme", "nebo", "jako", "které", "tým", "práce", "zkušenosti", "hledáme",
+           "nabízíme", "požadujeme"],
+}
+OTHER_LANG_NAMES = {"de": "German", "nl": "Dutch", "es": "Spanish", "pt": "Portuguese", "pl": "Polish",
+                    "sv": "Swedish", "da": "Danish or Norwegian", "fi": "Finnish", "hu": "Hungarian",
+                    "cs": "Czech"}
+_ANY_WORD_RE = re.compile(r"[^\W\d_]+")   # any letters, so ś, ő, č, å count as part of a word
+
+
+def detect_other_language(text: str | None, min_hits: int = 10, margin: float = 1.5) -> str | None:
+    """Code of a language other than en / fr / it when the text is clearly written in it, else None.
+
+    Bilingual postings (a German text followed by its English version) come back None,
+    so the caller can let the scorer judge them with the full text."""
+    if not text:
+        return None
+    counts = Counter(_ANY_WORD_RE.findall(text.lower()))
+    scores = {lang: sum(counts.get(m, 0) for m in markers)
+              for lang, markers in {**_MARKERS, **_OTHER_MARKERS}.items()}
+    ordered = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
+    best_lang, best = ordered[0]
+    if best_lang in _MARKERS or best < min_hits or best < margin * ordered[1][1]:
+        return None
+    return best_lang
+
+
 def detect_location_language(location: str | None) -> str | None:
     """Map a job location string to 'fr' or 'it' when it names a known place."""
     if not location:

@@ -86,14 +86,14 @@ def _load_location_config(search_cfg: dict) -> tuple[list[str], list[str]]:
     return accept, reject
 
 
-def _location_ok(location: str | None, accept: list[str], reject: list[str]) -> bool:
+def _location_ok(location: str | None, accept: list[str], reject: list[str], text: str = "") -> bool:
     """Check if a job location passes the user's location filter.
 
     Remote jobs are always accepted. Non-remote jobs must match an accept
-    pattern and not match a reject pattern.
+    pattern and not match a reject pattern. `text` is the title.
     """
     from applypilot.discovery.locfilter import location_ok
-    return location_ok(location, accept, reject)
+    return location_ok(location, accept, reject, text=text)
 
 
 # -- DB storage (JobSpy DataFrame -> SQLite) ---------------------------------
@@ -256,7 +256,7 @@ def _run_one_search(
     before = len(df)
     df = df[df.apply(lambda row: _location_ok(
         str(row.get("location", "")) if str(row.get("location", "")) != "nan" else None,
-        accept_locs, reject_locs,
+        accept_locs, reject_locs, text=str(row.get("title", "") or ""),
     ), axis=1)]
     filtered = before - len(df)
 

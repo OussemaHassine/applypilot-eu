@@ -26,7 +26,7 @@ discover ─► enrich ─► score ─► tailor ─► pdf ─► apply (cover
 |---|---|---|
 | **discover** | Searches Indeed, LinkedIn and Google Jobs for every title × market in `searches.yaml`, plus ~50 company Workday portals and direct career sites. Reads the job-alert emails boards send you (HelloWork: its search pages may not be crawled, its alerts may be read) and turns them into postings (`applypilot alerts`, also run by every Gmail check). Drops postings outside your accepted locations. | [JobSpy](https://github.com/Bunsly/JobSpy), HTTP, IMAP |
 | **enrich** | Downloads the full description and the real "apply" link of each posting (structured data first, AI extraction as a fallback). | Playwright + LLM |
-| **score** | Rates each posting 1–10 against your base CV. Internships, PhDs, over-senior and off-domain roles are capped. | LLM |
+| **score** | Rates each posting 1–10 against your base CV as a target to apply to. Hard caps first: posting not in your languages (detected before the model is called: score 2), non-QA role, internship, management or 8+ years, Eastern Europe unless remote/freelance/B2B, a must-have you cannot meet. A requirement up to 2 years above your experience costs at most a point. Years, degree and posting languages come from `profile.json` (`experience.years_of_experience_total`, `experience.education_level`, `languages.posting_languages`). | LLM |
 | **tailor** | Edits your own CV text for the job: the title line, the profile paragraph, the order of bullets/skills/projects, and at most 4 reworded bullets. Everything else stays identical and is checked line by line against the base CV; a judge model then checks for invented facts. Rendered with the Charter LaTeX template that reproduces the look of the original CVs (`**bold**` in the base text renders bold). | LLM |
 | **cover** | On demand only: while applying, the agent runs `applypilot cover-letter --url …` when the form has a cover-letter field or upload. 3 paragraphs in the posting's language, signed with your full name. Not written for forms without such a field. | LLM |
 | **pdf** | Renders the CV with LaTeX (shrinks to stay on one page) and falls back to HTML if LaTeX fails. | pdflatex / Chromium |
@@ -101,7 +101,7 @@ applypilot doctor
 |---|---|
 | `profile.json` | Identity, contact, address, per-country location, work rights, notice period, salary rules, languages, extra facts (date of birth, licence…), allowed skills, numbers the CV may quote. **Anything not in this file is never invented**: forms that require it get parked. |
 | `resume_<lang>.txt` | The source of truth for every tailored CV. Add a job, project or skill here and all future CVs include it. |
-| `searches.yaml` | Job titles (a title can carry `markets: [label, ...]` to run only in some markets), markets, freshness, accepted/rejected locations, boards. |
+| `searches.yaml` | Job titles (a title can carry `markets: [label, ...]` to run only in some markets), markets, freshness, `location_remote_only` (places kept only when the location or title says remote, freelance or B2B), accepted/rejected locations, boards. |
 | `run_settings.env` | `MIN_SCORE`, `MAX_APPLY` (0 = no limit: every scored job, then stop), `WORKERS`, `APPLY_MODEL`, `HEADLESS`. |
 | `api_keys.env` | `OPENAI_API_KEY` + `LLM_MODEL` (or `GEMINI_API_KEY` / `LLM_URL`), Gmail address + app password. |
 

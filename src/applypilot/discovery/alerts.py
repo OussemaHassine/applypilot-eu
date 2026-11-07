@@ -214,7 +214,7 @@ def ingest_alerts(days: int = 7, dry_run: bool = False) -> dict:
                         log.warning("Could not read a title from %s; skipped", url)
                         stats["errors"] += 1
                         continue
-                    if not location_ok(job.get("location"), accept, reject):
+                    if not location_ok(job.get("location"), accept, reject, text=job.get("title") or ""):
                         stats["filtered"] += 1
                         known.add(url)
                         continue

@@ -50,10 +50,10 @@ def _load_location_filter(search_cfg: dict | None = None):
     return accept, reject
 
 
-def _location_ok(location: str | None, accept: list[str], reject: list[str]) -> bool:
+def _location_ok(location: str | None, accept: list[str], reject: list[str], text: str = "") -> bool:
     """Check if a job location passes the user's location filter."""
     from applypilot.discovery.locfilter import location_ok
-    return location_ok(location, accept, reject)
+    return location_ok(location, accept, reject, text=text)
 
 
 # -- HTML stripper -----------------------------------------------------------
@@ -207,7 +207,7 @@ def search_employer(
         for j in postings:
             loc = j.get("locationsText", "")
             if location_filter and accept_locs is not None and reject_locs is not None:
-                if not _location_ok(loc, accept_locs, reject_locs):
+                if not _location_ok(loc, accept_locs, reject_locs, text=j.get("title", "") or ""):
                     continue
 
             all_jobs.append({
