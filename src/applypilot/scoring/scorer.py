@@ -29,7 +29,7 @@ SCORE_PROMPT = """You are a job fit evaluator for one specific candidate: a soft
 CANDIDATE FACTS: about {years} years of professional software QA experience; highest degree: {education}; working languages: {languages}. Trust these over any assumption from dates in the resume.
 
 HARD CAPS (check these first; the lowest applicable cap wins; name the cap in the reasoning):
-1. Posting language: a description written mainly in a language other than {languages} (German, Dutch, Spanish, Portuguese, Polish, Swedish, Danish, Norwegian, Finnish, Hungarian, Czech, ...): at most 3. A bilingual posting that carries a complete version in one of {languages} is fine.
+1. Posting language. The candidate reads {languages_and}: postings written in ANY of these three languages are NEVER capped for language, an Italian-only or French-only posting is as good as an English one. Only a description written mainly in some other language (German, Dutch, Spanish, Portuguese, Polish, Swedish, Danish, Norwegian, Finnish, Hungarian, Czech, Greek, ...) is capped: at most 3. A bilingual posting that carries a complete version in one of the three is fine.
 2. Role: the job must be software QA / software testing / test automation / SDET / QA automation / software quality engineering, in any title wording (QA Engineer, Software Tester, Testeur, Ingénieur QA, Ingénieur validation logiciel, Recette fonctionnelle, Collaudo software, Quality Assurance Analyst, Test Lead who still tests...). Testing AI/LLM features counts as QA. Anything else (developer, DevOps/SRE, data, product, support, business analyst, project manager, hardware/firmware/embedded test benches, pharma, manufacturing or automotive quality, network/telecom test): at most 3; at most 5 when the role's core work clearly transfers from the candidate's (test automation, scripting, API work, CI pipelines, release or test tooling, QA-adjacent analysis).
 3. Internships, apprenticeships, PhD positions, student, graduate-programme or entry-level-only roles (stage, tirocinio, stagiaire, alternance, Werkstudent, Praktikum, intern): at most 3.
 4. People management or very senior roles (Head of QA, QA/Test Manager, Engineering Manager, Director, Principal, Staff) or any role asking for {years_plus5}+ years: at most 5. A "Senior QA Engineer" asking {years_plus2} years is NOT in this group.
@@ -56,11 +56,11 @@ DEFAULT_POSTING_LANGUAGES = ["English", "French", "Italian"]
 _SYSTEM_PROMPT: str | None = None
 
 
-def _posting_languages() -> str:
-    """"English, French or Italian": the languages a posting may be written in (profile
-    languages.posting_languages, else the default)."""
+def _posting_languages(joiner: str = "or") -> str:
+    """"English, French or Italian" (or "... and Italian"): the languages a posting may be
+    written in (profile languages.posting_languages, else the default)."""
     langs = list((load_profile() or {}).get("languages", {}).get("posting_languages") or DEFAULT_POSTING_LANGUAGES)
-    return ", ".join(langs[:-1]) + " or " + langs[-1] if len(langs) > 1 else langs[0]
+    return ", ".join(langs[:-1]) + f" {joiner} " + langs[-1] if len(langs) > 1 else langs[0]
 
 
 def _system_prompt() -> str:
@@ -77,6 +77,7 @@ def _system_prompt() -> str:
                        or "sponsorship is needed for on-site or hybrid jobs outside the candidate's country")
         _SYSTEM_PROMPT = SCORE_PROMPT.format(years=years, years_plus1=years + 1, years_plus2=years + 2,
                                              years_plus5=years + 5, languages=_posting_languages(),
+                                             languages_and=_posting_languages("and"),
                                              education=education, sponsorship=sponsorship)
     return _SYSTEM_PROMPT
 
