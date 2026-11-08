@@ -30,11 +30,10 @@ CANDIDATE FACTS: about {years} years of professional software QA experience; hig
 
 HARD CAPS (check these first; the lowest applicable cap wins; name the cap in the reasoning):
 1. Posting language: a description written mainly in a language other than {languages} (German, Dutch, Spanish, Portuguese, Polish, Swedish, Danish, Norwegian, Finnish, Hungarian, Czech, ...): at most 3. A bilingual posting that carries a complete version in one of {languages} is fine.
-2. Role: the job must be software QA / software testing / test automation / SDET / QA automation / software quality engineering, in any title wording (QA Engineer, Software Tester, Testeur, Ingénieur QA, Ingénieur validation logiciel, Recette fonctionnelle, Collaudo software, Quality Assurance Analyst, Test Lead who still tests...). Testing AI/LLM features counts as QA. Anything else (developer, DevOps/SRE, data, product, support, business analyst, project manager, hardware/firmware/embedded test benches, pharma, manufacturing or automotive quality, network/telecom test): at most 3, even when some skills overlap.
+2. Role: the job must be software QA / software testing / test automation / SDET / QA automation / software quality engineering, in any title wording (QA Engineer, Software Tester, Testeur, Ingénieur QA, Ingénieur validation logiciel, Recette fonctionnelle, Collaudo software, Quality Assurance Analyst, Test Lead who still tests...). Testing AI/LLM features counts as QA. Anything else (developer, DevOps/SRE, data, product, support, business analyst, project manager, hardware/firmware/embedded test benches, pharma, manufacturing or automotive quality, network/telecom test): at most 3; at most 5 when the role's core work clearly transfers from the candidate's (test automation, scripting, API work, CI pipelines, release or test tooling, QA-adjacent analysis).
 3. Internships, apprenticeships, PhD positions, student, graduate-programme or entry-level-only roles (stage, tirocinio, stagiaire, alternance, Werkstudent, Praktikum, intern): at most 3.
 4. People management or very senior roles (Head of QA, QA/Test Manager, Engineering Manager, Director, Principal, Staff) or any role asking for {years_plus5}+ years: at most 5. A "Senior QA Engineer" asking {years_plus2} years is NOT in this group.
-5. Eastern Europe (Poland, Czechia, Slovakia, Hungary, Romania, Bulgaria, Croatia, Serbia, Slovenia, Estonia, Latvia, Lithuania, Ukraine): wanted only when fully remote, freelance or a B2B contract. On-site or hybrid there: at most 3.
-6. A must-have the candidate cannot meet: fluency in a language outside {languages}, a security clearance, a specific citizenship, a certification or degree he does not hold: at most 4.
+5. A must-have the candidate cannot meet, limited to three cases: fluency in a language outside {languages}; a specific citizenship or nationality (including a security clearance the posting ties to nationality); or the posting says visa sponsorship is not offered for a job where the candidate would need it ({sponsorship}): at most 4. Any other requirement he lacks (a certification, a degree, a tool) is an ordinary gap, never a cap.
 
 YEARS OF EXPERIENCE: the candidate has about {years} years. A posting asking up to 2 years more ({years_plus1} or {years_plus2}) is still a full match on experience: take off at most one point and never let it block a 7. A posting asking 3 or 4 years more: take off two points. Seniority words alone ("senior", "confirmé", "experienced") are not a gap.
 
@@ -46,7 +45,7 @@ SCORE (after the caps):
 - 1-2: unrelated field.
 
 Count in favour: Playwright, Python, TypeScript/JavaScript, API testing (REST, Postman), CI/CD (GitLab CI, GitHub Actions), Agile/Scrum, test strategy and planning, exploratory and regression testing, AI-assisted testing, remote or hybrid work, English-speaking teams.
-Count against: mandatory languages outside {languages}, on-site five days a week far from Italy or France, clearance or citizenship requirements, purely manual roles with no automation at all (7 at most).
+Count against: purely manual roles with no automation at all (7 at most); a certification, degree or tool he lacks (ordinary gap). Location in Europe or the Gulf is never a gap by itself: the candidate is open to relocation.
 
 RESPOND IN EXACTLY THIS FORMAT (no other text):
 SCORE: [1-10]
@@ -72,9 +71,13 @@ def _system_prompt() -> str:
             years = int((load_profile() or {}).get("experience", {}).get("years_of_experience_total") or 3)
         except (TypeError, ValueError):
             years = 3
-        education = (load_profile() or {}).get("experience", {}).get("education_level") or "Master's degree"
+        profile = load_profile() or {}
+        education = profile.get("experience", {}).get("education_level") or "Master's degree"
+        sponsorship = (profile.get("work_authorization", {}).get("sponsorship_rule")
+                       or "sponsorship is needed for on-site or hybrid jobs outside the candidate's country")
         _SYSTEM_PROMPT = SCORE_PROMPT.format(years=years, years_plus1=years + 1, years_plus2=years + 2,
-                                             years_plus5=years + 5, languages=_posting_languages(), education=education)
+                                             years_plus5=years + 5, languages=_posting_languages(),
+                                             education=education, sponsorship=sponsorship)
     return _SYSTEM_PROMPT
 
 

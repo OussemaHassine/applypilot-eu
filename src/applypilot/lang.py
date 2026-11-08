@@ -85,8 +85,10 @@ _OTHER_MARKERS: dict[str, list[str]] = {
 }
 OTHER_LANG_NAMES = {"de": "German", "nl": "Dutch", "es": "Spanish", "pt": "Portuguese", "pl": "Polish",
                     "sv": "Swedish", "da": "Danish or Norwegian", "fi": "Finnish", "hu": "Hungarian",
-                    "cs": "Czech"}
+                    "cs": "Czech", "el": "Greek", "cyr": "a Cyrillic-script language (Bulgarian, Serbian, Ukrainian, Russian)"}
 _ANY_WORD_RE = re.compile(r"[^\W\d_]+")   # any letters, so ś, ő, č, å count as part of a word
+_GREEK_RE = re.compile(r"[\u0370-\u03ff]{2,}")
+_CYRILLIC_RE = re.compile(r"[\u0400-\u04ff]{2,}")
 
 
 def detect_other_language(text: str | None, min_hits: int = 10, margin: float = 1.5) -> str | None:
@@ -96,7 +98,14 @@ def detect_other_language(text: str | None, min_hits: int = 10, margin: float = 
     so the caller can let the scorer judge them with the full text."""
     if not text:
         return None
-    counts = Counter(_ANY_WORD_RE.findall(text.lower()))
+    words = _ANY_WORD_RE.findall(text.lower())
+    greek, cyrillic = len(_GREEK_RE.findall(text)), len(_CYRILLIC_RE.findall(text))
+    latin = len(words) - greek - cyrillic
+    if greek >= min_hits and greek > margin * latin:        # a Greek text, not a Greek/English bilingual one
+        return "el"
+    if cyrillic >= min_hits and cyrillic > margin * latin:
+        return "cyr"
+    counts = Counter(words)
     scores = {lang: sum(counts.get(m, 0) for m in markers)
               for lang, markers in {**_MARKERS, **_OTHER_MARKERS}.items()}
     ordered = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
