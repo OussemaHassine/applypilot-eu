@@ -35,7 +35,7 @@ LEDGER_PATH = config.LOG_DIR / "sent_emails.jsonl"
 MAX_RECIPIENTS = 3
 MAX_ATTACHMENTS = 5
 MAX_TOTAL_BYTES = 15 * 1024 * 1024
-MIN_BODY_CHARS = 80
+MIN_BODY_CHARS = 500   # about 90 words; shorter reads as a throwaway note
 
 _ADDRESS_RE = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}$")
 
@@ -153,7 +153,8 @@ def send_application_email(to, subject: str, body: str, attachments=(), job_url:
     if not subject or not subject.strip():
         raise EmailError("subject is empty")
     if len((body or "").strip()) < MIN_BODY_CHARS:
-        raise EmailError(f"body is too short ({len((body or '').strip())} chars); write a real message")
+        raise EmailError(f"body is too short ({len((body or '').strip())} chars, minimum {MIN_BODY_CHARS}); "
+                         "nothing was sent. Write the full message (130-200 words) and run the command again")
 
     previous = already_sent(job_url)
     if previous and not force:

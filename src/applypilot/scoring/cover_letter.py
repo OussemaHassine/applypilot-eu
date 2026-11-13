@@ -1,7 +1,7 @@
 """Cover letter generation: LLM-powered, profile-driven, with validation.
 
-Generates concise, engineering-voice cover letters tailored to specific job
-postings. All personal data (name, skills, achievements) comes from the user's
+Generates full-length (about 300 words), human-sounding cover letters tailored to
+specific job postings. All personal data (name, skills, achievements) comes from the user's
 profile at runtime. No hardcoded personal information.
 """
 
@@ -24,6 +24,8 @@ from applypilot.lang import (
 from applypilot.llm import get_client
 from applypilot.scoring.validator import (
     BANNED_WORDS,
+    COVER_LETTER_TELLS,
+    COVER_TARGET_WORDS,
     LLM_LEAK_PHRASES,
     sanitize_text,
     validate_cover_letter,
@@ -74,6 +76,7 @@ def _build_cover_letter_prompt(profile: dict, lang: str = DEFAULT_LANG, location
     # with what will actually be rejected — the validator checks all of these.
     all_banned = ", ".join(f'"{w}"' for w in BANNED_WORDS)
     leak_banned = ", ".join(f'"{p}"' for p in LLM_LEAK_PHRASES)
+    tells_banned = ", ".join(f'"{p}"' for p in COVER_LETTER_TELLS)
     lang_name = LANG_NAMES.get(lang, "English")
     salutation = COVER_SALUTATIONS.get(lang, COVER_SALUTATIONS["en"])
     location_line = ""
@@ -86,38 +89,49 @@ def _build_cover_letter_prompt(profile: dict, lang: str = DEFAULT_LANG, location
             f"LANGUAGES: {spoken_languages_for(location, lang)}.{arabic_rule}\n"
         )
 
-    return f"""Write a cover letter for {sign_off_name}. The goal is to get an interview.
+    return f"""Write a cover letter for {sign_off_name}. The reader is a recruiter or hiring manager who goes through dozens of these a day, and the goal is an interview. It has to read like {sign_off_name} sat down and wrote it for this one job, not like a template with the company name swapped in.
 
 LANGUAGE: Write the entire letter in {lang_name}, the language of the job posting. Keep tool, product and company names as they are. Use natural {lang_name} business-letter phrasing, including the closing line.
 
-STRUCTURE: 3 short paragraphs. Under 250 words. Every sentence must earn its place.
+LENGTH AND SHAPE: 4 paragraphs, {COVER_TARGET_WORDS[0]} to {COVER_TARGET_WORDS[1]} words in total. Plain paragraphs separated by a blank line. No bullets, no headings, no bold.
+LAYOUT: "{salutation}" alone on the first line, a blank line, the 4 paragraphs, a blank line, a short closing formula alone on its own line (the usual one for a {lang_name} letter, e.g. the equivalent of "Kind regards,"), then "{full_name}" alone on the last line. The closing formula is never part of paragraph 4.
 {location_line}
+EMPLOYER NAME: The employer is the company the job description names. "FOUND ON" is only the job board (LinkedIn, Indeed, HelloWork...) and must never be written as the employer or mentioned at all. If the description does not name the employer (anonymous or agency posting), write "your team" / "your company" and do not guess a name.
 
-PARAGRAPH 1 (2-3 sentences): Open with a specific thing YOU built that solves THEIR problem. Not "I'm excited about this role." Not "This role aligns with my experience." Start with the work.
+PARAGRAPH 1 (2-3 sentences): Name the role and the employer, then go straight to the part of your work that sits closest to what this team needs and say why that made the posting stand out to you. Not "I am writing to apply for". Not "I'm excited about this role".
 
-PARAGRAPH 2 (3-4 sentences): Pick 2 achievements from the resume that are MOST relevant to THIS job. Use a number only if it appears in the resume; if an achievement has no number, describe it without one. Frame as solving their problem, not listing your accomplishments.{projects_hint}{metrics_hint}
+PARAGRAPH 2 (4-5 sentences): Tell the story of the ONE achievement from the resume that matters most for this job: what you were dealing with, what you did, how you went about it, and what changed afterwards. Give it room. Use a number only if it appears in the resume; if the resume gives no number, describe the result without one.{projects_hint}{metrics_hint}
 
-PARAGRAPH 3 (1-2 sentences): One specific thing about the company from the job description (a product, a technical challenge, a team structure). Then close. "Happy to walk through any of this in more detail." or "Let's discuss." Nothing else.
+PARAGRAPH 3 (3-4 sentences): A second piece of experience that answers a DIFFERENT requirement of the posting. Say which requirement it answers, in your own words, so the reader sees you read the posting properly.
+
+PARAGRAPH 4 (3-4 sentences): What draws you to this company or team, based on one concrete thing the job description says (a product, a technical challenge, how the team works) and tied to work you have actually done. If location is relevant, give it one short sentence of its own here. Then close simply and warmly by offering a conversation, in one sentence.
+
+HOW A PERSON WRITES (this matters as much as the content):
+- First person, plain everyday words, the way a thoughtful engineer writes to a future colleague. Warm and direct. Not stiff, not gushing.
+- Mix sentence lengths. Follow a long sentence with a short one. Never start more than two sentences in a row with "I".
+- Retell the resume, do not copy it. A resume bullet pasted into a sentence is the fastest way to sound generated. Explain the work the way you would across a table.
+- Connect ideas the way people do in speech ("That is why", "Before that", "In practice", "What I liked about that work") and let one paragraph lead into the next.
+- In English a few contractions (I've, I'm, didn't) are welcome. In other languages keep the normal register of a professional letter.
+- Not every sentence needs a tool name. One or two sentences of plain reasoning about why you worked that way make the letter sound like a person.
+- No semicolons. No lists of three adjectives. No "not only X but also Y". No rhetorical questions. No sentence that sums up the paragraph it sits in. No sentence that explains what the previous one "shows" or "demonstrates".
+- Do not hand the job description back to the reader in its own sentences. Refer to one or two concrete things from it in your own words.
+- Do not hedge ("might", "could potentially", "I think I may"). State what you did and what you would bring.
 
 BANNED WORDS AND PHRASES (automated validator rejects ANY of these — do not use even once):
 {all_banned}
 
+ALSO BANNED (stock phrases that mark a letter as machine-written or copy-pasted):
+{tells_banned}
+
 ALSO BANNED (meta-commentary the validator catches):
 {leak_banned}
 
-BANNED PUNCTUATION: No em dashes (—) or en dashes (–). Use commas or periods.
-
-VOICE:
-- Write like a real engineer emailing someone they respect. Not formal, not casual. Just direct.
-- NEVER narrate or explain what you're doing. BAD: "This demonstrates my commitment to X." GOOD: Just state the fact and move on.
-- NEVER hedge. BAD: "might address some of your challenges." GOOD: "solves the same problem your team is facing."
-- Every sentence should contain a tool name from the resume, a real outcome from the resume, or a specific point from the job description. If it doesn't, cut it.
-- Read it out loud. If it sounds like a robot wrote it, rewrite it.
+BANNED PUNCTUATION: No em dashes (—) or en dashes (–), no semicolons. Use commas or periods.
 
 FABRICATION = INSTANT REJECTION:
 The candidate's real tools are ONLY: {skills_str}.
 Do NOT mention ANY tool not in this list. If the job asks for tools not listed, talk about the work you did, not the tools.
-Every claim about the candidate must be traceable to a sentence in the resume: no invented projects, clients, team sizes, outcomes, numbers, certifications or motivations. Say nothing about the company beyond what the job description states. Do not claim the candidate has used, led or delivered anything the resume does not say.
+Every claim about the candidate must be traceable to a sentence in the resume: no invented projects, clients, team sizes, outcomes, numbers, certifications, anecdotes or personal history. The extra length must come from explaining real work in more depth and from linking it to the posting, never from new facts. If the resume does not give a detail, leave it out. Say nothing about the company beyond what the job description states. Do not claim the candidate has used, led or delivered anything the resume does not say.
 
 Sign off with the full name: "{full_name}"
 
@@ -168,7 +182,7 @@ def generate_cover_letter(
     """
     job_text = (
         f"TITLE: {job['title']}\n"
-        f"COMPANY: {job['site']}\n"
+        f"FOUND ON (the job board or source; this is NOT the employer): {job['site']}\n"
         f"LOCATION: {job.get('location', 'N/A')}\n\n"
         f"DESCRIPTION:\n{(job.get('full_description') or '')[:6000]}"
     )
@@ -197,7 +211,7 @@ def generate_cover_letter(
             )},
         ]
 
-        letter = client.chat(messages, max_tokens=1024, temperature=0.7)
+        letter = client.chat(messages, max_tokens=2048, temperature=0.8)
         letter = sanitize_text(letter)  # auto-fix em dashes, smart quotes
         letter = _strip_preamble(letter, lang)  # remove any "Here is the letter:" prefix
 

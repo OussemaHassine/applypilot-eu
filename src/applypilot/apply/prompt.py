@@ -663,6 +663,23 @@ def build_prompt(job: dict, tailored_resume: str,
     # (Gmail SMTP, same app password as the inbox tracker). Local patch 2026-11-03.
     from applypilot.mailer import is_configured as _smtp_ready
     has_gmail = (Path.home() / ".gmail-mcp" / "gcp-oauth.keys.json").exists()
+    # How an application email should read (user rule 2026-11-13: fuller, and written like a person)
+    email_style = (
+        f'It is a real email from the candidate to the person hiring for "{job["title"]}", 130-200 words, plain text: '
+        "a greeting (use the contact's name when the posting gives one), then three short paragraphs. "
+        "First: which role this is about, where it was posted, and in one sentence the part of the candidate's "
+        "work that is closest to it. Second: one or two concrete things from the TAILORED RESUME that answer what "
+        "the posting asks for, told the way a person would explain them to a colleague, not as resume bullets. "
+        "Third: that the CV is attached (and the cover letter, if one is), when and how the candidate can be "
+        "reached, and one friendly line offering a call. Then a closing with the full name, phone, email and "
+        "LinkedIn from the APPLICANT PROFILE, each on its own line. "
+        "It must sound human-written: plain everyday words, sentences of different lengths, no more than two "
+        'sentences in a row starting with "I", a few contractions in English. No bullet points, no bold, no '
+        'semicolons, no long dashes, no stock openers or filler ("I hope this email finds you well", "I am writing to '
+        'express my interest", "thrilled", "passionate", "leverage", "fast-paced", "perfect fit", "proven track '
+        'record"). ONLY facts from the TAILORED RESUME and the posting: no invented facts, no salary unless the '
+        "posting asks for one."
+    )
     if _smtp_ready():
         body_file = str(dest_dir / "application_email.txt")
         email_only_rule = (
@@ -670,10 +687,7 @@ def build_prompt(job: dict, tailored_resume: str,
             '"candidature par e-mail", "inviare il CV a ..."), apply by email:\n'
             "   a. Copy the recipient address EXACTLY as written on the posting. No address visible -> "
             "RESULT:FAILED:email_only_no_address. Never guess, derive or look up an address.\n"
-            f"   b. Write the message in {lang_name} to the file {body_file} (Write tool): a greeting, 3-5 sentences "
-            f'naming the role ("{job["title"]}") and why the candidate fits it, using ONLY facts from the TAILORED '
-            "RESUME, then a closing with the full name, phone, email and LinkedIn from the APPLICANT PROFILE. "
-            "No invented facts, no salary unless the posting asks for one.\n"
+            f"   b. Write the message in {lang_name} to the file {body_file} (Write tool). {email_style}\n"
             "   c. If the posting asks for a cover letter, run the cover-letter command from the COVER LETTER "
             "section first and attach its PDF too.\n"
             "   d. Send it with the Bash tool and wait for it to finish:\n"
@@ -683,13 +697,15 @@ def build_prompt(job: dict, tailored_resume: str,
             '      (add --attach "<cover letter PDF>" when one was written; --cc "<address>" only for a second '
             "address the posting names)\n"
             "   e. EMAIL_SENT printed -> output RESULT:APPLIED and stop. EMAIL_ERROR printed -> "
-            "RESULT:FAILED:email_send_error (<the error>). Run the command ONCE; never resend."
+            "RESULT:FAILED:email_send_error (<the error>). Never resend an email that went out. The one exception: "
+            "EMAIL_ERROR says the body is too short -> nothing was sent, so rewrite the message to the length asked "
+            "above and run the command one more time."
         )
     elif has_gmail:
         email_only_rule = (
             f'If email-only (page says "email resume to X"):\n'
             f'   - send_email with subject "Application for {job["title"]} -- {full_name}", '
-            f'body = 2-3 sentence pitch + contact info, attach resume PDF: ["{pdf_path}"]\n'
+            f'body written like this: {email_style} Attach resume PDF: ["{pdf_path}"]\n'
             f'   - Output RESULT:APPLIED. Done.'
         )
     else:

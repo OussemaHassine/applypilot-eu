@@ -56,6 +56,22 @@ LLM_LEAK_PHRASES: list[str] = [
     "the following cover letter", "the letter below",
 ]
 
+# Stock phrases that make a cover letter read as machine-written or copy-pasted.
+# Cover letters only (resumes legitimately use some of these words).
+COVER_LETTER_TELLS: list[str] = [
+    "i am writing to", "i'm writing to", "i hope this", "finds you well",
+    "thrilled", "delve", "leverage", "leveraging", "testament to", "tapestry",
+    "fast-paced", "dynamic team", "aligns perfectly", "perfect fit", "ideal candidate",
+    "honed", "keen interest", "showcase", "underscores", "pivotal", "landscape",
+    "in today's", "ever-evolving", "resonates with", "not only",
+    "unique blend", "skill set", "hit the ground running", "add value",
+    "thank you for considering", "thank you for your time and consideration",
+]
+
+# Cover letter length, in words (salutation and sign-off included).
+COVER_TARGET_WORDS: tuple[int, int] = (280, 360)   # what the prompt asks for
+COVER_HARD_WORDS: tuple[int, int] = (220, 430)     # outside this a strict-mode letter is rejected
+
 # Known fabrication markers: completely unrelated tools/languages.
 # Reasonable stretches (K8s, Terraform, Redis, Kafka etc.) are ALLOWED.
 FABRICATION_WATCHLIST: set[str] = {
@@ -347,8 +363,8 @@ def validate_cover_letter(text: str, mode: str = "normal", lang: str = "en") -> 
     Args:
         text: The cover letter text to validate.
         mode: Validation strictness — "strict", "normal", or "lenient".
-              strict  → banned words are errors (trigger retries); word limit enforced
-              normal  → banned words are warnings; word limit is soft (+25 words)
+              strict  → banned words, stock phrases and length outside COVER_HARD_WORDS are errors (trigger retries)
+              normal  → the same checks are warnings
               lenient → banned words ignored; word count not checked
 
     Returns:
@@ -372,13 +388,24 @@ def validate_cover_letter(text: str, mode: str = "normal", lang: str = "en") -> 
             else:  # normal
                 warnings.append(msg)
 
-    # 3. Word count
+    # 3. Word count: too short reads dry, too long does not fit a page or get read
     words = len(text.split())
-    if mode == "strict" and words > 250:
-        errors.append(f"Too long ({words} words). Max 250.")
-    elif mode == "normal" and words > 275:
-        warnings.append(f"Long ({words} words). Target 250.")
-    # lenient: no word count check
+    lo, hi = COVER_HARD_WORDS
+    if mode != "lenient" and not lo <= words <= hi:
+        msg = (f"Too short ({words} words). Write {COVER_TARGET_WORDS[0]}-{COVER_TARGET_WORDS[1]} words in 4 "
+               "paragraphs by explaining the real work in more depth, without adding facts."
+               if words < lo else
+               f"Too long ({words} words). Write {COVER_TARGET_WORDS[0]}-{COVER_TARGET_WORDS[1]} words.")
+        (errors if mode == "strict" else warnings).append(msg)
+
+    # 3b. Machine-written tells: stock phrases and semicolons
+    if mode != "lenient":
+        tells = [w for w in COVER_LETTER_TELLS if re.search(r"\b" + re.escape(w) + r"\b", text_lower)]
+        if ";" in text:
+            tells.append("semicolons (use two sentences)")
+        if tells:
+            msg = f"Reads as machine-written, remove: {', '.join(tells[:5])}"
+            (errors if mode == "strict" else warnings).append(msg)
 
     # 4. LLM self-talk — always an error regardless of mode
     found_leaks = [p for p in LLM_LEAK_PHRASES if p in text_lower]
@@ -391,5 +418,15 @@ def validate_cover_letter(text: str, mode: str = "normal", lang: str = "en") -> 
     stripped = text.strip()
     if not stripped.lower().startswith(prefixes):
         errors.append(f"Must start with '{COVER_SALUTATIONS.get(lang, COVER_SALUTATIONS['en'])}'")
+
+    # 6. Letter layout: salutation on its own line, separate paragraphs, name on the last line
+    if mode != "lenient" and stripped:
+        lines = stripped.splitlines()
+        if len(lines[0].split()) > 8:
+            errors.append("The salutation must be alone on the first line, followed by a blank line.")
+        if len([b for b in re.split(r"\n\s*\n", stripped) if b.strip()]) < 5:
+            errors.append("Layout: salutation, blank line, 4 paragraphs separated by blank lines, closing line, name.")
+        if len(lines[-1].split()) > 6:
+            errors.append("The last line must be the candidate's full name alone, after a closing line of its own.")
 
     return {"passed": len(errors) == 0, "errors": errors, "warnings": warnings}
